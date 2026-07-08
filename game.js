@@ -3,13 +3,14 @@ import InputManager from './js/managers/InputManager.js'
 import SceneManager from './js/managers/SceneManager.js'
 import AudioManager from './js/managers/AudioManager.js'
 import ShareManager from './js/managers/ShareManager.js'
+import SocketManager from './js/managers/SocketManager.js'
 import GameScene from './js/scenes/GameScene.js'
 import LoadingScene from './js/scenes/LoadingScene.js'
 import MenuScene from './js/scenes/MenuScene.js'
 import RankScene from './js/scenes/RankScene.js'
 import ResultScene from './js/scenes/ResultScene.js'
 import RoomScene from './js/scenes/RoomScene.js'
-import { CLOUD_ENV_ID, COLORS, FONTS, GAME_NAME, SCENE_KEYS } from './js/utils/config.js'
+import { CLOUD_ENV_ID, COLORS, ENABLE_WS_DEBUG, FONTS, GAME_NAME, SCENE_KEYS } from './js/utils/config.js'
 
 function initCloud() {
   if (typeof wx === 'undefined' || !wx.cloud) {
@@ -94,6 +95,7 @@ function initGame() {
   sceneManager.switchTo(SCENE_KEYS.LOADING)
   gameManager.start()
   initShareMenu()
+  initWebSocketSelfTest()
 }
 
 function initShareMenu() {
@@ -110,6 +112,23 @@ function initShareMenu() {
       return ShareManager.getInstance().buildChallengePayload()
     })
   }
+}
+
+function initWebSocketSelfTest() {
+  if (!ENABLE_WS_DEBUG) return
+
+  SocketManager.getInstance().selfTest()
+    .then(() => {
+      if (typeof wx !== 'undefined' && wx.showToast) {
+        wx.showToast({ title: 'WebSocket连接成功', icon: 'none' })
+      }
+    })
+    .catch((error) => {
+      const message = error && error.message ? error.message : String(error || 'WebSocket连接失败')
+      if (typeof wx !== 'undefined' && wx.showToast) {
+        wx.showToast({ title: message, icon: 'none' })
+      }
+    })
 }
 
 function registerPlaceholderScene(sceneManager, gameManager, key, title) {

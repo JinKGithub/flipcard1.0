@@ -51,6 +51,10 @@
         "type": "folder"
       },
       {
+        "value": "server",
+        "type": "folder"
+      },
+      {
         "value": "release-assets",
         "type": "folder"
       },

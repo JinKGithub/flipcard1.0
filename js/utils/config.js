@@ -1,5 +1,18 @@
 export const CLOUD_ENV_ID = 'cloud1-d6g9k3wjr8cb10ec3'
 
+export const SYNC_MODE = 'cloud'
+export const ENABLE_WS_DEBUG = false
+export const WS_CONFIG = {
+  env: 'prod-d9g87ibuu6e4a9bb1',
+  service: 'express-zt59',
+  path: '/ws',
+  url: '',
+  timeout: 10000,
+  heartbeatInterval: 10000,
+  reconnectMaxAttempts: 3,
+  reconnectBaseDelay: 1000
+}
+
 export const GAME_NAME = '翻翻对决'
 
 export const SCENE_KEYS = {

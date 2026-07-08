@@ -1,6 +1,7 @@
 import InputManager from '../managers/InputManager.js'
 import UserManager from '../managers/UserManager.js'
 import ShareManager from '../managers/ShareManager.js'
+import SocketManager from '../managers/SocketManager.js'
 import CloudDB from '../utils/CloudDB.js'
 import ResourceLoader from '../utils/ResourceLoader.js'
 import Button from '../ui/Button.js'
@@ -13,6 +14,7 @@ import {
   PLAYER_ROLE,
   ROOM_STATUS,
   SCENE_KEYS,
+  SYNC_MODE,
   UI_IMAGES
 } from '../utils/config.js'
 
@@ -22,6 +24,7 @@ class RoomScene {
     this.sceneManager = options.sceneManager || null
     this.inputManager = options.inputManager || InputManager.getInstance()
     this.userManager = options.userManager || UserManager.getInstance()
+    this.socketManager = options.socketManager || SocketManager.getInstance()
     this.cloudDB = options.cloudDB || CloudDB.getInstance()
     this.shareManager = options.shareManager || ShareManager.getInstance()
     this.loader = options.loader || new ResourceLoader()
@@ -34,6 +37,8 @@ class RoomScene {
     this.countdownActive = false
     this.countdownElapsed = 0
     this.watchHandle = null
+    this.socketOffs = []
+    this.usingSocketSync = false
     this.pollTimer = null
     this.mode = 'create'
     this.loading = false
@@ -91,7 +96,7 @@ class RoomScene {
       this.createLayout()
       this.registerInputs()
       this.startWatch()
-      this.startPolling()
+      if (!this.shouldUseSocketSync()) this.startPolling()
       this.checkReadyCountdown()
     } catch (error) {
       this.loading = false
@@ -345,6 +350,9 @@ class RoomScene {
 
   startWatch() {
     this.stopWatch()
+    if (this.shouldUseSocketSync()) {
+      this.startSocketSync()
+    }
   }
 
   stopWatch() {
@@ -357,6 +365,94 @@ class RoomScene {
       }, 200)
     }
     this.watchHandle = null
+    this.stopSocketSync()
+  }
+
+  shouldUseSocketSync() {
+    return SYNC_MODE === 'websocket' && Boolean(this.room && this.room._id)
+  }
+
+  startSocketSync() {
+    this.stopSocketSync()
+    this.usingSocketSync = true
+    this.statusText = '正在连接实时服务...'
+
+    const applyRoomMessage = (message = {}) => {
+      const payload = message.payload || {}
+      if (payload.room) {
+        this.applyRoomUpdate(payload.room)
+        return
+      }
+
+      if (payload.players || payload.status || payload.difficulty) {
+        this.applyRoomUpdate({
+          ...this.room,
+          players: payload.players || this.room.players,
+          status: payload.status || this.room.status,
+          difficulty: payload.difficulty || this.room.difficulty,
+          countdownStartTime: payload.countdownStartTime || this.room.countdownStartTime || 0
+        })
+      }
+    }
+
+    const fallbackToPolling = () => {
+      if (!this.shouldUseSocketSync()) return
+      this.usingSocketSync = false
+      this.statusText = '实时连接失败，已切回云同步'
+      this.startPolling()
+    }
+
+    ;[
+      'roomSnapshot',
+      'roomState',
+      'playerJoined',
+      'playerOffline',
+      'playerLeave',
+      'countdownStart',
+      'gameStart'
+    ].forEach((type) => {
+      this.socketOffs.push(this.socketManager.on(type, applyRoomMessage))
+    })
+    this.socketOffs.push(this.socketManager.on('fallback', fallbackToPolling))
+    this.socketOffs.push(this.socketManager.on('socketError', fallbackToPolling))
+
+    this.socketManager.connect()
+      .then(() => {
+        if (!this.shouldUseSocketSync()) return
+        this.statusText = ''
+        this.socketManager.send('joinRoom', {
+          room: this.room,
+          player: this.room.players[this.myRole] || {}
+        }, this.getSocketSendOptions())
+      })
+      .catch(() => fallbackToPolling())
+  }
+
+  stopSocketSync() {
+    this.socketOffs.forEach((off) => {
+      if (typeof off === 'function') off()
+    })
+    this.socketOffs = []
+    this.usingSocketSync = false
+  }
+
+  getSocketSendOptions() {
+    const user = this.userManager.getCurrentUser()
+    return {
+      roomId: this.room && this.room._id ? this.room._id : '',
+      roomCode: this.room && this.room.roomCode ? this.room.roomCode : '',
+      role: this.myRole,
+      openid: user.openid || ''
+    }
+  }
+
+  broadcastSocketRoom(type = 'roomState') {
+    if (!this.shouldUseSocketSync() || !this.socketManager.isOpen()) return
+
+    this.socketManager.send('broadcast', {
+      type,
+      room: this.room
+    }, this.getSocketSendOptions()).catch(() => {})
   }
 
   startPolling() {
@@ -457,6 +553,7 @@ class RoomScene {
 
     if (payload.room) {
       this.applyRoomUpdate(payload.room, { force: true })
+      this.broadcastSocketRoom(action === 'startGame' ? 'gameStart' : 'roomState')
     }
 
     return payload.room
@@ -542,6 +639,9 @@ class RoomScene {
   async leaveRoom() {
     if (this.room && this.room._id) {
       try {
+        if (this.shouldUseSocketSync() && this.socketManager.isOpen()) {
+          this.socketManager.send('leaveRoom', {}, this.getSocketSendOptions()).catch(() => {})
+        }
         await this.cloudDB.callFunction('leaveRoom', { roomId: this.room._id })
       } catch (error) {}
     }

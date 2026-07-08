@@ -3,6 +3,7 @@ import InputManager from '../managers/InputManager.js'
 import AudioManager from '../managers/AudioManager.js'
 import UserManager from '../managers/UserManager.js'
 import NetworkManager from '../managers/NetworkManager.js'
+import SocketManager from '../managers/SocketManager.js'
 import ResourceLoader from '../utils/ResourceLoader.js'
 import CardGrid from '../models/CardGrid.js'
 import Player from '../models/Player.js'
@@ -15,6 +16,7 @@ import {
   PLAYER_ROLE,
   ROOM_STATUS,
   SCENE_KEYS,
+  SYNC_MODE,
   TURN_SECONDS,
   UI_IMAGES
 } from '../utils/config.js'
@@ -27,6 +29,7 @@ class GameScene {
     this.audioManager = options.audioManager || AudioManager.getInstance()
     this.userManager = options.userManager || UserManager.getInstance()
     this.networkManager = options.networkManager || NetworkManager.getInstance()
+    this.socketManager = options.socketManager || SocketManager.getInstance()
     this.loader = options.loader || new ResourceLoader()
 
     this.room = null
@@ -37,6 +40,8 @@ class GameScene {
     this.pauseButton = null
     this.cardInputTarget = null
     this.syncingRemote = false
+    this.socketOffs = []
+    this.usingSocketSync = false
     this.uploadingCount = 0
     this.mode = 'battle'
     this.flipCount = 0
@@ -148,9 +153,13 @@ class GameScene {
       turnSeconds: TURN_SECONDS
     })
 
-    this.logic.on('cardFlip', () => {
+    this.logic.on('cardFlip', (payload) => {
       this.flipCount += 1
       this.audioManager.play('FLIP')
+      if (this.shouldUseSocketSync() && this.socketManager.isOpen()) {
+        this.uploadSocketFlip(payload)
+        return
+      }
       this.uploadGameState({}, true)
     })
     this.logic.on('matchSuccess', () => {
@@ -265,6 +274,11 @@ class GameScene {
     this.stopSync()
     if (!this.room._id) return
 
+    if (this.shouldUseSocketSync()) {
+      this.startSocketSync()
+      return
+    }
+
     this.networkManager.watchRoom(this.room._id, (room) => {
       this.applyRemoteRoom(room)
     })
@@ -272,6 +286,130 @@ class GameScene {
 
   stopSync() {
     this.networkManager.stopWatch()
+    this.stopSocketSync()
+  }
+
+  shouldUseSocketSync() {
+    return SYNC_MODE === 'websocket' && this.mode === 'battle' && Boolean(this.room && this.room._id)
+  }
+
+  startSocketSync() {
+    this.stopSocketSync()
+    this.usingSocketSync = true
+
+    const applyRoomMessage = (message = {}) => {
+      const from = message.from || {}
+      if (from.role === this.myRole && message.type !== 'roomSnapshot') return
+
+      const room = message.payload && message.payload.room
+      if (room) {
+        this.applyRemoteRoom(room)
+      }
+    }
+
+    const applyFlipMessage = (message = {}) => {
+      const from = message.from || {}
+      if (from.role === this.myRole) return
+
+      const payload = message.payload || {}
+      const card = this.cardGrid.getCardById(payload.cardId)
+      if (!card || card.state !== CARD_STATE.HIDDEN) return
+
+      card.reveal()
+      this.flipCount = payload.flipCount || this.flipCount
+      this.logic.flippedCards = (payload.flippedCards || [])
+        .map((cardId) => this.cardGrid.getCardById(cardId))
+        .filter(Boolean)
+    }
+
+    const handleOpponentLeave = (message = {}) => {
+      const from = message.from || {}
+      if (!from.role || from.role === this.myRole) return
+      this.fetchCloudRoomAndApply()
+    }
+
+    const fallbackToCloud = () => this.fallbackToCloudSync()
+
+    ;['roomSnapshot', 'gameStart', 'gameStateUpdate', 'turnResult'].forEach((type) => {
+      this.socketOffs.push(this.socketManager.on(type, applyRoomMessage))
+    })
+    this.socketOffs.push(this.socketManager.on('flipCard', applyFlipMessage))
+    this.socketOffs.push(this.socketManager.on('playerLeave', handleOpponentLeave))
+    this.socketOffs.push(this.socketManager.on('fallback', fallbackToCloud))
+    this.socketOffs.push(this.socketManager.on('socketError', fallbackToCloud))
+
+    this.socketManager.connect()
+      .then(() => {
+        if (!this.shouldUseSocketSync()) return
+        this.socketManager.send('joinRoom', {
+          room: this.room,
+          player: this.room.players[this.myRole] || {}
+        }, this.getSocketSendOptions()).catch(() => this.fallbackToCloudSync())
+      })
+      .catch(() => this.fallbackToCloudSync())
+  }
+
+  stopSocketSync() {
+    this.socketOffs.forEach((off) => {
+      if (typeof off === 'function') off()
+    })
+    this.socketOffs = []
+    this.usingSocketSync = false
+  }
+
+  fallbackToCloudSync() {
+    if (!this.shouldUseSocketSync() || !this.room._id) return
+    if (!this.usingSocketSync) return
+
+    this.stopSocketSync()
+    this.showToast('实时连接不稳定，已切回云同步')
+    this.networkManager.watchRoom(this.room._id, (room) => {
+      this.applyRemoteRoom(room)
+    })
+  }
+
+  getSocketSendOptions() {
+    const user = this.userManager.getCurrentUser()
+    return {
+      roomId: this.room && this.room._id ? this.room._id : '',
+      roomCode: this.room && this.room.roomCode ? this.room.roomCode : '',
+      role: this.myRole,
+      openid: user.openid || ''
+    }
+  }
+
+  uploadSocketFlip(payload = {}) {
+    const card = payload.card
+    if (!card) return
+
+    this.socketManager.send('flipCard', {
+      cardId: card.id,
+      state: card.state,
+      flippedCards: this.logic.flippedCards.map((item) => item.id),
+      flipCount: this.flipCount
+    }, this.getSocketSendOptions()).catch(() => this.fallbackToCloudSync())
+  }
+
+  async uploadSocketGameState(nextRoom) {
+    if (!this.socketManager.isOpen()) {
+      this.fallbackToCloudSync()
+      return
+    }
+
+    try {
+      await this.socketManager.send('gameStateUpdate', {
+        room: nextRoom
+      }, this.getSocketSendOptions())
+    } catch (error) {
+      this.fallbackToCloudSync()
+    }
+  }
+
+  async fetchCloudRoomAndApply() {
+    try {
+      const room = await this.networkManager.cloudDB.get('rooms', this.room._id)
+      if (room) this.applyRemoteRoom(room, { force: true })
+    } catch (error) {}
   }
 
   async uploadGameState(extra = {}, immediate = false, options = {}) {
@@ -318,6 +456,10 @@ class GameScene {
     this.syncingRemote = true
 
     try {
+      if (this.shouldUseSocketSync() && this.socketManager.isOpen()) {
+        await this.uploadSocketGameState(this.room)
+        return
+      }
       const cloudRoom = await this.networkManager.uploadGameState(this.room._id, nextRoom, { immediate })
       if (cloudRoom) this.applyRemoteRoom(cloudRoom, { force: true })
     } catch (error) {

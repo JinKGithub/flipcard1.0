@@ -1,0 +1,19 @@
+{
+  "name": "flip-battle-websocket",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WebSocket service for Flip Battle WeChat minigame.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js",
+    "check": "node --check src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.3",
+    "ws": "^8.16.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
