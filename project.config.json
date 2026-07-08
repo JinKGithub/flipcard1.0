@@ -1,0 +1,139 @@
+{
+  "description": "翻翻对决微信小游戏",
+  "packOptions": {
+    "ignore": [
+      {
+        "value": "docs",
+        "type": "folder"
+      },
+      {
+        "value": "development-guide.md",
+        "type": "file"
+      },
+      {
+        "value": "scene-layout-design.md",
+        "type": "file"
+      },
+      {
+        "value": "technical-architecture.md",
+        "type": "file"
+      },
+      {
+        "value": "release-guide.md",
+        "type": "file"
+      },
+      {
+        "value": "test-plan.md",
+        "type": "file"
+      },
+      {
+        "value": "flip-battle-prompts.md",
+        "type": "file"
+      },
+      {
+        "value": "assets/audio/bgm.mp3",
+        "type": "file"
+      },
+      {
+        "value": "assets/images/ui/home/logo.png",
+        "type": "file"
+      },
+      {
+        "value": "assets/images/ui/home/logo-fixed.png",
+        "type": "file"
+      },
+      {
+        "value": "backups",
+        "type": "folder"
+      },
+      {
+        "value": "tools",
+        "type": "folder"
+      },
+      {
+        "value": "release-assets",
+        "type": "folder"
+      },
+      {
+        "value": "fruit-card-assets",
+        "type": "folder"
+      },
+      {
+        "value": "fruit-card-sample",
+        "type": "folder"
+      },
+      {
+        "value": "assets/images/ui/logo.png",
+        "type": "file"
+      },
+      {
+        "value": ".git",
+        "type": "folder"
+      },
+      {
+        "value": ".agents",
+        "type": "folder"
+      },
+      {
+        "value": ".codex",
+        "type": "folder"
+      }
+    ],
+    "include": []
+  },
+  "setting": {
+    "urlCheck": true,
+    "es6": true,
+    "enhance": false,
+    "postcss": false,
+    "preloadBackgroundData": false,
+    "minified": true,
+    "newFeature": true,
+    "coverView": true,
+    "nodeModules": false,
+    "autoAudits": false,
+    "showShadowRootInWxmlPanel": true,
+    "scopeDataCheck": false,
+    "uglifyFileName": false,
+    "checkInvalidKey": true,
+    "checkSiteMap": false,
+    "uploadWithSourceMap": true,
+    "compileHotReLoad": false,
+    "lazyloadPlaceholderEnable": false,
+    "useMultiFrameRuntime": true,
+    "useApiHook": true,
+    "useApiHostProcess": true,
+    "babelSetting": {
+      "ignore": [],
+      "disablePlugins": [],
+      "outputPath": ""
+    },
+    "enableEngineNative": false,
+    "useIsolateContext": false,
+    "userConfirmedBundleSwitch": false,
+    "packNpmManually": false,
+    "packNpmRelationList": [],
+    "minifyWXSS": true,
+    "disableUseStrict": false,
+    "minifyWXML": true,
+    "showES6CompileOption": false,
+    "useCompilerPlugins": false,
+    "compileWorklet": false,
+    "localPlugins": false,
+    "condition": false,
+    "swc": false,
+    "disableSWC": true
+  },
+  "compileType": "game",
+  "cloudfunctionRoot": "cloudfunctions/",
+  "libVersion": "3.15.1",
+  "appid": "wxf477bacd6f2d6a7a",
+  "projectname": "flip-battle",
+  "condition": {},
+  "editorSetting": {
+    "tabIndent": "insertSpaces",
+    "tabSize": 2
+  },
+  "simulatorPluginLibVersion": {},
+  "isGameTourist": false
+}

@@ -1,0 +1,9 @@
+{
+  "name": "leaveRoom",
+  "version": "1.0.0",
+  "description": "Leave a Flip Battle room.",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "latest"
+  }
+}

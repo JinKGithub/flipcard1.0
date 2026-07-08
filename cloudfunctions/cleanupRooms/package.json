@@ -1,0 +1,9 @@
+{
+  "name": "cleanupRooms",
+  "version": "1.0.0",
+  "description": "Clean expired Flip Battle rooms.",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "latest"
+  }
+}

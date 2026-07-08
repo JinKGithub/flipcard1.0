@@ -1,0 +1,9 @@
+{
+  "name": "updateRoom",
+  "version": "1.0.0",
+  "description": "Update Flip Battle room state through cloud permission.",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "latest"
+  }
+}

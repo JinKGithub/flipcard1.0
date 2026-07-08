@@ -1,0 +1,9 @@
+{
+  "name": "joinRoom",
+  "version": "1.0.0",
+  "description": "Join a Flip Battle room.",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "latest"
+  }
+}

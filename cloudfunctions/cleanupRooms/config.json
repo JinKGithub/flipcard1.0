@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "openapi": []
+  },
+  "timeout": 20,
+  "triggers": [
+    {
+      "name": "cleanupExpiredRooms",
+      "type": "timer",
+      "config": "0 */30 * * * * *"
+    }
+  ]
+}

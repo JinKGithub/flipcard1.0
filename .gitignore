@@ -1,0 +1,33 @@
+# Local/private project files
+project.private.config.json
+.env
+.env.*
+
+# Local tooling and agent workspaces
+.codex/
+.agents/
+
+# Dependencies
+node_modules/
+cloudfunctions/**/node_modules/
+
+# Build/cache/log files
+dist/
+build/
+tmp/
+temp/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Generated or release-only assets kept outside the game package
+release-assets/
+fruit-card-assets/
+fruit-card-sample/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

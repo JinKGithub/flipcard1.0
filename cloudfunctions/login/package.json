@@ -1,0 +1,9 @@
+{
+  "name": "login",
+  "version": "1.0.0",
+  "description": "Login and create or update user profile.",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "latest"
+  }
+}
