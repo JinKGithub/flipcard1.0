@@ -402,6 +402,23 @@ class RoomScene {
       this.startPolling()
     }
 
+    const handleServerError = (message = {}) => {
+      const payload = message.payload || {}
+      const code = payload.code || ''
+      if (!code) return
+
+      if (['NOT_READY', 'ROOM_ENDED', 'ROOM_ALREADY_STARTED', 'ONLY_HOST'].includes(code)) {
+        this.startRequested = false
+        this.countdownActive = false
+        this.countdown = 0
+        this.countdownElapsed = 0
+      }
+
+      const error = new Error(payload.message || code)
+      error.code = code
+      this.showToast(this.getErrorMessage(error))
+    }
+
     ;[
       'roomSnapshot',
       'roomState',
@@ -415,6 +432,7 @@ class RoomScene {
     })
     this.socketOffs.push(this.socketManager.on('fallback', fallbackToPolling))
     this.socketOffs.push(this.socketManager.on('socketError', fallbackToPolling))
+    this.socketOffs.push(this.socketManager.on('error', handleServerError))
 
     this.socketManager.connect()
       .then(() => {
@@ -540,6 +558,11 @@ class RoomScene {
   async roomAction(action, data = {}) {
     if (!this.room || !this.room._id) return null
 
+    const socketHandled = await this.sendSocketRoomAction(action, data)
+    if (socketHandled) {
+      return this.room
+    }
+
     const result = await this.cloudDB.callFunction('updateRoom', {
       roomId: this.room._id,
       action,
@@ -557,6 +580,35 @@ class RoomScene {
     }
 
     return payload.room
+  }
+
+  async sendSocketRoomAction(action, data = {}) {
+    if (!this.shouldUseSocketSync() || !this.socketManager.isOpen()) return false
+
+    const typeMap = {
+      setReady: 'playerReady',
+      setDifficulty: 'difficultyChange',
+      startGame: 'gameStart'
+    }
+    const messageType = typeMap[action]
+    if (!messageType) return false
+
+    const payloadMap = {
+      setReady: { ready: Boolean(data.ready) },
+      setDifficulty: { difficulty: data.difficulty },
+      startGame: {}
+    }
+
+    try {
+      const result = await this.socketManager.send(
+        messageType,
+        payloadMap[action] || {},
+        this.getSocketSendOptions()
+      )
+      return !result || !result.queued
+    } catch (error) {
+      return false
+    }
   }
 
   async toggleReady() {
@@ -931,6 +983,7 @@ class RoomScene {
     if (code === 'NOT_READY') return '双方准备后才能开始'
     if (code === 'ROOM_ENDED') return '房间已结束，请重新创建'
     if (code === 'ONLY_HOST') return '只有房主可以操作'
+    if (code === 'INVALID_DIFFICULTY') return '难度设置无效'
     if (code === 'ROOM_NOT_PLAYING') return '房间未在游戏中'
     if (code === 'NOT_IN_ROOM') return '你不在该房间中'
 
@@ -941,6 +994,7 @@ class RoomScene {
     if (message === 'Room is full.') return '房间已满'
     if (message === 'ROOM_ENDED') return '房间已结束，请重新创建'
     if (message === 'NOT_READY') return '双方准备后才能开始'
+    if (message === 'Invalid difficulty.') return '难度设置无效'
     if (message === 'ROOM_NOT_FOUND') return '房间不存在，请检查房间号'
     if (message === 'INVALID_ROOM_CODE') return '请输入6位数字房间号'
     if (message === 'ROOM_FULL') return '房间已满'

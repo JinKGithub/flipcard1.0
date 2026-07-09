@@ -2,7 +2,16 @@ const crypto = require('crypto')
 
 const OPEN = 1
 const PLAYER_ROLES = ['host', 'guest']
-const DIFFICULTIES = ['EASY', 'MEDIUM', 'HARD']
+const DIFFICULTY_CONFIG = {
+  EASY: { key: 'EASY', rows: 4, cols: 4, pairCount: 8 },
+  MEDIUM: { key: 'MEDIUM', rows: 6, cols: 4, pairCount: 12 },
+  HARD: { key: 'HARD', rows: 6, cols: 6, pairCount: 18 }
+}
+const DIFFICULTIES = Object.keys(DIFFICULTY_CONFIG)
+const TURN_DURATION_MS = 15 * 1000
+const CARD_IMAGES = Array.from({ length: 18 }, (_, index) => {
+  return `assets/images/cards/card-${index + 1}.png`
+})
 
 function createRoomStore(options = {}) {
   const clientTimeoutMs = Number(options.clientTimeoutMs || 30000)
@@ -269,8 +278,48 @@ function createRoomStore(options = {}) {
     const room = requireRoom(client, message.requestId)
     if (!room) return
 
-    const payload = message.payload || {}
-    mergeRoom(room, payload.room || payload)
+    if (room.status === 'ended') {
+      sendError(client, 'ROOM_ENDED', 'Room has ended.', message.requestId)
+      return
+    }
+
+    const players = normalizePlayers(room.players)
+    const hostReady = Boolean(players.host && players.host.ready)
+    const guestReady = Boolean(players.guest && players.guest.openid && players.guest.ready)
+
+    if (!hostReady || !guestReady) {
+      sendError(client, 'NOT_READY', 'Both players must be ready.', message.requestId)
+      return
+    }
+
+    if (room.status !== 'playing' || !room.cards.length) {
+      const now = Date.now()
+      const seed = room.seed || now + Math.floor(Math.random() * 100000)
+
+      room.seed = seed
+      room.cards = generateCards(room.difficulty || 'EASY', seed)
+      room.status = 'playing'
+      room.countdownStartTime = 0
+      room.gameState = {
+        ...(room.gameState || {}),
+        currentPlayer: (room.gameState && room.gameState.currentPlayer) || randomRole(),
+        flippedCards: [],
+        matchedCount: 0,
+        timer: 15,
+        startTime: now,
+        turnStartTime: now,
+        turnDeadline: now + TURN_DURATION_MS,
+        serverTime: now,
+        turnVersion: 1,
+        flipCount: 0,
+        scores: {
+          host: 0,
+          guest: 0
+        },
+        actionSeq: Number(room.gameState && room.gameState.actionSeq || 0)
+      }
+    }
+
     room.status = 'playing'
     room.updatedAt = Date.now()
     room.gameState.actionSeq = Number(room.gameState.actionSeq || 0)
@@ -659,6 +708,63 @@ function createRoomStore(options = {}) {
       }
       return card
     })
+  }
+
+  function randomRole() {
+    return Math.random() > 0.5 ? 'host' : 'guest'
+  }
+
+  function generateCards(difficultyKey, seed) {
+    const config = DIFFICULTY_CONFIG[String(difficultyKey || 'EASY').toUpperCase()] || DIFFICULTY_CONFIG.EASY
+    const selectedImages = shuffle(CARD_IMAGES, seed).slice(0, config.pairCount)
+    const cards = []
+
+    selectedImages.forEach((imageUrl, index) => {
+      const pairId = `pair_${index + 1}`
+      cards.push({
+        id: `card_${index + 1}_a`,
+        pairId,
+        imageUrl,
+        state: 'hidden'
+      })
+      cards.push({
+        id: `card_${index + 1}_b`,
+        pairId,
+        imageUrl,
+        state: 'hidden'
+      })
+    })
+
+    return shuffle(cards, seed).map((card, index) => ({
+      ...card,
+      position: {
+        row: Math.floor(index / config.cols),
+        col: index % config.cols
+      }
+    }))
+  }
+
+  function shuffle(items, seed) {
+    const result = items.slice()
+    const random = createSeededRandom(seed)
+
+    for (let index = result.length - 1; index > 0; index -= 1) {
+      const randomIndex = Math.floor(random() * (index + 1))
+      const temp = result[index]
+      result[index] = result[randomIndex]
+      result[randomIndex] = temp
+    }
+
+    return result
+  }
+
+  function createSeededRandom(seed) {
+    let value = Number(seed) || 1
+
+    return function random() {
+      value = (value * 9301 + 49297) % 233280
+      return value / 233280
+    }
   }
 
   function normalizeRole(role) {
