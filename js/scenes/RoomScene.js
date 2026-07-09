@@ -127,7 +127,11 @@ class RoomScene {
     if (this.countdownElapsed >= 3000 && !this.startRequested) {
       this.startRequested = true
       this.countdownActive = false
-      this.startGame()
+      if (this.shouldClientStartGame()) {
+        this.startGame()
+      } else {
+        this.statusText = '正在进入游戏...'
+      }
     }
   }
 
@@ -587,16 +591,14 @@ class RoomScene {
 
     const typeMap = {
       setReady: 'playerReady',
-      setDifficulty: 'difficultyChange',
-      startGame: 'gameStart'
+      setDifficulty: 'difficultyChange'
     }
     const messageType = typeMap[action]
     if (!messageType) return false
 
     const payloadMap = {
       setReady: { ready: Boolean(data.ready) },
-      setDifficulty: { difficulty: data.difficulty },
-      startGame: {}
+      setDifficulty: { difficulty: data.difficulty }
     }
 
     try {
@@ -704,8 +706,9 @@ class RoomScene {
     const hostReady = Boolean(this.room.players.host && this.room.players.host.ready)
     const guestReady = Boolean(this.room.players.guest && this.room.players.guest.ready)
     const hasGuest = Boolean(this.room.players.guest && this.room.players.guest.openid)
+    const serverCountdown = this.room.status === ROOM_STATUS.COUNTDOWN
 
-    if (hostReady && guestReady && hasGuest && !this.countdownActive) {
+    if (serverCountdown && hostReady && guestReady && hasGuest && !this.countdownActive) {
       this.countdownActive = true
       this.countdown = 3
       this.startRequested = false
@@ -713,7 +716,7 @@ class RoomScene {
       this.countdownElapsed = Math.max(0, Date.now() - startTime)
     }
 
-    if ((!hostReady || !guestReady || !hasGuest) && this.countdownActive) {
+    if ((!serverCountdown || !hostReady || !guestReady || !hasGuest) && this.countdownActive) {
       this.countdownActive = false
       this.countdown = 0
       this.countdownElapsed = 0
@@ -732,6 +735,10 @@ class RoomScene {
       this.startRequested = false
       this.showToast(this.getErrorMessage(error))
     }
+  }
+
+  shouldClientStartGame() {
+    return !this.shouldUseSocketSync() || !this.usingSocketSync || !this.socketManager.isOpen()
   }
 
   gotoGame() {
@@ -984,6 +991,7 @@ class RoomScene {
     if (code === 'ROOM_ENDED') return '房间已结束，请重新创建'
     if (code === 'ONLY_HOST') return '只有房主可以操作'
     if (code === 'INVALID_DIFFICULTY') return '难度设置无效'
+    if (code === 'SERVER_START_ONLY') return '服务端正在自动开局'
     if (code === 'ROOM_NOT_PLAYING') return '房间未在游戏中'
     if (code === 'NOT_IN_ROOM') return '你不在该房间中'
 

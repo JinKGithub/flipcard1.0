@@ -47,6 +47,11 @@ function createRoomStore(options = {}) {
 
     room.clients.delete(socketId)
     markPlayerOnline(room, client.role, false, '')
+    if (room.status === 'countdown') {
+      cancelCountdown(room)
+      room.status = 'waiting'
+      room.countdownStartTime = 0
+    }
     if (room.status === 'playing') {
       markForfeit(room, client.role)
     }
@@ -66,6 +71,7 @@ function createRoomStore(options = {}) {
     })
 
     if (room.clients.size === 0 && room.status !== 'playing') {
+      cancelCountdown(room)
       rooms.delete(room.roomId)
     }
   }
@@ -176,6 +182,8 @@ function createRoomStore(options = {}) {
       socketId: client.socketId
     }
 
+    ensureCountdownTimer(room, client, message.requestId)
+
     sendSnapshot(client, message.requestId)
     broadcast(room, {
       type: 'playerJoined',
@@ -195,6 +203,11 @@ function createRoomStore(options = {}) {
 
     markPlayerOnline(room, client.role, false, '')
     room.clients.delete(client.socketId)
+    if (room.status === 'countdown') {
+      cancelCountdown(room)
+      room.status = 'waiting'
+      room.countdownStartTime = 0
+    }
     if (room.status === 'playing') {
       markForfeit(room, client.role)
     }
@@ -222,30 +235,25 @@ function createRoomStore(options = {}) {
     const room = requireRoom(client, message.requestId)
     if (!room) return
 
+    if (['playing', 'ended'].includes(room.status)) {
+      sendError(client, 'ROOM_ALREADY_STARTED', 'Room has already started.', message.requestId)
+      return
+    }
+
     const ready = Boolean(message.payload && message.payload.ready)
     room.players[client.role] = {
       ...getPlayer(room, client.role),
       ready
     }
 
-    const hostReady = Boolean(room.players.host && room.players.host.ready)
-    const guestReady = Boolean(room.players.guest && room.players.guest.openid && room.players.guest.ready)
-    room.status = hostReady && guestReady ? 'countdown' : 'waiting'
-    room.countdownStartTime = room.status === 'countdown' ? Date.now() : 0
-    room.updatedAt = Date.now()
-
-    broadcastRoomState(room, client, message.requestId)
-
-    if (room.status === 'countdown') {
-      broadcast(room, {
-        type: 'countdownStart',
-        roomId: room.roomId,
-        from: getSender(client),
-        payload: {
-          countdownStartTime: room.countdownStartTime,
-          status: room.status
-        }
-      })
+    if (areBothPlayersReady(room)) {
+      startCountdown(room, client, message.requestId)
+    } else {
+      cancelCountdown(room)
+      room.status = 'waiting'
+      room.countdownStartTime = 0
+      room.updatedAt = Date.now()
+      broadcastRoomState(room, client, message.requestId)
     }
   }
 
@@ -278,62 +286,15 @@ function createRoomStore(options = {}) {
     const room = requireRoom(client, message.requestId)
     if (!room) return
 
-    if (room.status === 'ended') {
-      sendError(client, 'ROOM_ENDED', 'Room has ended.', message.requestId)
+    if (room.status !== 'playing') {
+      sendError(client, 'SERVER_START_ONLY', 'Game starts automatically after countdown.', message.requestId)
       return
     }
 
-    const players = normalizePlayers(room.players)
-    const hostReady = Boolean(players.host && players.host.ready)
-    const guestReady = Boolean(players.guest && players.guest.openid && players.guest.ready)
-
-    if (!hostReady || !guestReady) {
-      sendError(client, 'NOT_READY', 'Both players must be ready.', message.requestId)
-      return
+    const result = startGameOnce(room, getSender(client), message.requestId)
+    if (!result.ok) {
+      sendError(client, result.code, result.message, message.requestId)
     }
-
-    if (room.status !== 'playing' || !room.cards.length) {
-      const now = Date.now()
-      const seed = room.seed || now + Math.floor(Math.random() * 100000)
-
-      room.seed = seed
-      room.cards = generateCards(room.difficulty || 'EASY', seed)
-      room.status = 'playing'
-      room.countdownStartTime = 0
-      room.gameState = {
-        ...(room.gameState || {}),
-        currentPlayer: (room.gameState && room.gameState.currentPlayer) || randomRole(),
-        flippedCards: [],
-        matchedCount: 0,
-        timer: 15,
-        startTime: now,
-        turnStartTime: now,
-        turnDeadline: now + TURN_DURATION_MS,
-        serverTime: now,
-        turnVersion: 1,
-        flipCount: 0,
-        scores: {
-          host: 0,
-          guest: 0
-        },
-        actionSeq: Number(room.gameState && room.gameState.actionSeq || 0)
-      }
-    }
-
-    room.status = 'playing'
-    room.updatedAt = Date.now()
-    room.gameState.actionSeq = Number(room.gameState.actionSeq || 0)
-
-    broadcast(room, {
-      type: 'gameStart',
-      requestId: message.requestId,
-      roomId: room.roomId,
-      from: getSender(client),
-      actionSeq: bumpActionSeq(room),
-      payload: {
-        room: toClientRoom(room)
-      }
-    })
   }
 
   function flipCard(client, message) {
@@ -460,7 +421,7 @@ function createRoomStore(options = {}) {
       type: 'roomState',
       requestId,
       roomId: room.roomId,
-      from: getSender(client),
+      from: client ? getSender(client) : getSystemSender(),
       payload: {
         room: toClientRoom(room),
         players: room.players,
@@ -469,6 +430,156 @@ function createRoomStore(options = {}) {
         countdownStartTime: room.countdownStartTime || 0
       }
     })
+  }
+
+  function startCountdown(room, client, requestId = '') {
+    const alreadyCounting = room.status === 'countdown' && room.countdownTimer
+    if (alreadyCounting) {
+      broadcastRoomState(room, client, requestId)
+      return
+    }
+
+    cancelCountdown(room)
+
+    const now = Date.now()
+    room.status = 'countdown'
+    room.countdownStartTime = now
+    room.updatedAt = now
+    room.countdownTimer = setTimeout(() => {
+      room.countdownTimer = null
+
+      if (!rooms.has(room.roomId)) return
+      if (room.status !== 'countdown') return
+      if (!areBothPlayersReady(room)) {
+        room.status = 'waiting'
+        room.countdownStartTime = 0
+        room.updatedAt = Date.now()
+        broadcastRoomState(room, null, '')
+        return
+      }
+
+      startGameOnce(room, getSystemSender(), '')
+    }, 3000)
+
+    broadcastRoomState(room, client, requestId)
+    broadcast(room, {
+      type: 'countdownStart',
+      roomId: room.roomId,
+      from: client ? getSender(client) : getSystemSender(),
+      payload: {
+        countdownStartTime: room.countdownStartTime,
+        status: room.status
+      }
+    })
+  }
+
+  function ensureCountdownTimer(room, client, requestId = '') {
+    if (room.status !== 'countdown' || !areBothPlayersReady(room) || room.countdownTimer) return
+
+    const now = Date.now()
+    const startTime = room.countdownStartTime || now
+    const delay = Math.max(0, startTime + 3000 - now)
+    room.countdownStartTime = startTime
+    room.countdownTimer = setTimeout(() => {
+      room.countdownTimer = null
+
+      if (!rooms.has(room.roomId)) return
+      if (room.status !== 'countdown') return
+      if (!areBothPlayersReady(room)) {
+        room.status = 'waiting'
+        room.countdownStartTime = 0
+        room.updatedAt = Date.now()
+        broadcastRoomState(room, null, '')
+        return
+      }
+
+      startGameOnce(room, getSystemSender(), '')
+    }, delay)
+
+    broadcast(room, {
+      type: 'countdownStart',
+      requestId,
+      roomId: room.roomId,
+      from: client ? getSender(client) : getSystemSender(),
+      payload: {
+        countdownStartTime: room.countdownStartTime,
+        status: room.status
+      }
+    })
+  }
+
+  function cancelCountdown(room) {
+    if (!room || !room.countdownTimer) return
+    clearTimeout(room.countdownTimer)
+    room.countdownTimer = null
+  }
+
+  function startGameOnce(room, sender = getSystemSender(), requestId = '') {
+    if (!room) {
+      return { ok: false, code: 'ROOM_NOT_JOINED', message: 'Client has not joined a room.' }
+    }
+
+    if (room.status === 'ended') {
+      return { ok: false, code: 'ROOM_ENDED', message: 'Room has ended.' }
+    }
+
+    if (!areBothPlayersReady(room) && room.status !== 'playing') {
+      return { ok: false, code: 'NOT_READY', message: 'Both players must be ready.' }
+    }
+
+    cancelCountdown(room)
+
+    if (room.status !== 'playing' || !room.cards.length) {
+      const now = Date.now()
+      const seed = room.seed || now + Math.floor(Math.random() * 100000)
+
+      room.seed = seed
+      room.cards = generateCards(room.difficulty || 'EASY', seed)
+      room.status = 'playing'
+      room.countdownStartTime = 0
+      room.gameState = {
+        ...(room.gameState || {}),
+        currentPlayer: (room.gameState && room.gameState.currentPlayer) || randomRole(),
+        flippedCards: [],
+        matchedCount: 0,
+        timer: 15,
+        startTime: now,
+        turnStartTime: now,
+        turnDeadline: now + TURN_DURATION_MS,
+        serverTime: now,
+        turnVersion: 1,
+        flipCount: 0,
+        scores: {
+          host: 0,
+          guest: 0
+        },
+        actionSeq: Number(room.gameState && room.gameState.actionSeq || 0)
+      }
+    }
+
+    room.status = 'playing'
+    room.updatedAt = Date.now()
+    room.gameState.actionSeq = Number(room.gameState.actionSeq || 0)
+
+    broadcast(room, {
+      type: 'gameStart',
+      requestId,
+      roomId: room.roomId,
+      from: sender,
+      actionSeq: bumpActionSeq(room),
+      payload: {
+        room: toClientRoom(room)
+      }
+    })
+
+    return { ok: true }
+  }
+
+  function areBothPlayersReady(room) {
+    const players = normalizePlayers(room.players)
+    const hostReady = Boolean(players.host && players.host.openid && players.host.ready && players.host.online)
+    const guestReady = Boolean(players.guest && players.guest.openid && players.guest.ready && players.guest.online)
+    return hostReady && guestReady
   }
 
   function sendSnapshot(client, requestId = '') {
@@ -569,6 +680,7 @@ function createRoomStore(options = {}) {
       sourceUpdateTime: Number(data.updateTime || 0),
       gameState,
       clients: new Map(),
+      countdownTimer: null,
       createdAt: Date.now(),
       updatedAt: Date.now()
     }
@@ -691,6 +803,7 @@ function createRoomStore(options = {}) {
   }
 
   function markForfeit(room, leaveRole) {
+    cancelCountdown(room)
     const winner = leaveRole === 'host' ? 'guest' : 'host'
     room.status = 'ended'
     room.gameState = {
@@ -777,6 +890,14 @@ function createRoomStore(options = {}) {
       socketId: client.socketId,
       role: client.role,
       openid: client.openid
+    }
+  }
+
+  function getSystemSender() {
+    return {
+      socketId: 'server',
+      role: 'server',
+      openid: ''
     }
   }
 
