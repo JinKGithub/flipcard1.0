@@ -528,7 +528,8 @@ function createRoomStore(options = {}) {
       room.sourceUpdateTime = Math.max(Number(room.sourceUpdateTime || 0), patch.updateTime)
     }
     if (typeof patch.countdownStartTime === 'number') room.countdownStartTime = patch.countdownStartTime
-    if (Array.isArray(patch.cards) && (patch.cards.length > 0 || !room.cards.length)) {
+    const staleGameState = patch.gameState && isStaleGameState(room.gameState, patch.gameState)
+    if (!staleGameState && Array.isArray(patch.cards) && (patch.cards.length > 0 || !room.cards.length)) {
       room.cards = patch.cards.slice()
     }
     if (patch.players) {
@@ -543,15 +544,46 @@ function createRoomStore(options = {}) {
         }
       }
     }
-    if (patch.gameState) {
+    if (patch.gameState && !staleGameState) {
+      const previousActionSeq = Number(room.gameState && room.gameState.actionSeq || 0)
+      const incomingActionSeq = Number(patch.gameState.actionSeq || 0)
       room.gameState = {
         ...room.gameState,
         ...patch.gameState
       }
+      room.gameState.actionSeq = Math.max(previousActionSeq, incomingActionSeq)
     }
 
     room.updatedAt = Date.now()
     return room
+  }
+
+  function isStaleGameState(current = {}, incoming = {}) {
+    const currentTurnVersion = Number(current.turnVersion || 0)
+    const incomingHasTurnVersion = Object.prototype.hasOwnProperty.call(incoming, 'turnVersion')
+    const incomingTurnVersion = Number(incoming.turnVersion || 0)
+    const currentMatchedCount = Number(current.matchedCount || 0)
+    const incomingHasMatchedCount = Object.prototype.hasOwnProperty.call(incoming, 'matchedCount')
+    const incomingMatchedCount = Number(incoming.matchedCount || 0)
+    const currentFlipCount = Number(current.flipCount || 0)
+    const incomingHasFlipCount = Object.prototype.hasOwnProperty.call(incoming, 'flipCount')
+    const incomingFlipCount = Number(incoming.flipCount || 0)
+
+    if (incomingHasTurnVersion && currentTurnVersion && incomingTurnVersion < currentTurnVersion) {
+      return true
+    }
+    if (incomingHasMatchedCount && incomingMatchedCount < currentMatchedCount) {
+      return true
+    }
+    if (
+      incomingHasFlipCount &&
+      incomingFlipCount < currentFlipCount &&
+      (!incomingHasTurnVersion || incomingTurnVersion <= currentTurnVersion)
+    ) {
+      return true
+    }
+
+    return false
   }
 
   function toClientRoom(room) {

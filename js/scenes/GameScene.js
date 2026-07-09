@@ -452,6 +452,7 @@ class GameScene {
       duration: Math.floor((now - this.startTime) / 1000),
       flipCount: this.flipCount
     }
+    delete gameState.actionSeq
 
     const nextRoom = {
       ...extra,
