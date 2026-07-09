@@ -406,7 +406,9 @@ function createRoomStore(options = {}) {
 
     const payload = message.payload || {}
     if (payload.room) {
-      mergeRoom(room, payload.room)
+      if (room.status !== 'playing') {
+        mergeRoom(room, payload.room)
+      }
       payload.room = toClientRoom(room)
     }
 

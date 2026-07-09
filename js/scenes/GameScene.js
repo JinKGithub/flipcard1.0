@@ -165,10 +165,6 @@ class GameScene {
       if (this.isServerAuthoritative()) return
       this.flipCount += 1
       this.audioManager.play('FLIP')
-      if (this.shouldUseSocketSync() && this.socketManager.isOpen()) {
-        this.uploadSocketFlip(payload)
-        return
-      }
       this.uploadGameState({}, true)
     })
     this.logic.on('matchSuccess', () => {
@@ -363,22 +359,6 @@ class GameScene {
       }
     }
 
-    const applyFlipMessage = (message = {}) => {
-      if (!this.shouldApplySocketMessage(message)) return
-      const from = message.from || {}
-      if (from.role === this.myRole) return
-
-      const payload = message.payload || {}
-      const card = this.cardGrid.getCardById(payload.cardId)
-      if (!card || card.state !== CARD_STATE.HIDDEN) return
-
-      card.reveal()
-      this.flipCount = payload.flipCount || this.flipCount
-      this.logic.flippedCards = (payload.flippedCards || [])
-        .map((cardId) => this.cardGrid.getCardById(cardId))
-        .filter(Boolean)
-    }
-
     const handleOpponentLeave = (message = {}) => {
       const from = message.from || {}
       if (!from.role || from.role === this.myRole) return
@@ -396,7 +376,6 @@ class GameScene {
     ;['roomSnapshot', 'gameStart', 'gameStateUpdate', 'turnResult', 'flipCard'].forEach((type) => {
       this.socketOffs.push(this.socketManager.on(type, applyRoomMessage))
     })
-    this.socketOffs.push(this.socketManager.on('flipCard', applyFlipMessage))
     this.socketOffs.push(this.socketManager.on('playerLeave', handleOpponentLeave))
     this.socketOffs.push(this.socketManager.on('playerOffline', handleOpponentLeave))
     this.socketOffs.push(this.socketManager.on('fallback', fallbackToCloud))
@@ -510,6 +489,7 @@ class GameScene {
 
   async uploadGameState(extra = {}, immediate = false, options = {}) {
     if (!this.room._id || !this.logic) return
+    if (this.isServerAuthoritative()) return
 
     const snapshot = this.logic.getSnapshot()
     const shouldResetTimer = Boolean(options.resetTurnTimer)
@@ -553,7 +533,7 @@ class GameScene {
     this.syncingRemote = true
 
     try {
-      if (this.shouldUseSocketSync() && this.socketManager.isOpen()) {
+      if (this.shouldUseSocketSync() && this.usingSocketSync && this.socketManager.isOpen()) {
         await this.uploadSocketGameState(this.room)
         return
       }
