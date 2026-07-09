@@ -1,0 +1,9 @@
+**
+!Dockerfile
+!server/
+!server/websocket/
+!server/websocket/package.json
+!server/websocket/package-lock.json
+!server/websocket/src/
+!server/websocket/src/**
+!server/websocket/README.md
