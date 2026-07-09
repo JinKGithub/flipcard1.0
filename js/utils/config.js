@@ -1,6 +1,6 @@
 export const CLOUD_ENV_ID = 'cloud1-d6g9k3wjr8cb10ec3'
 
-export const SYNC_MODE = 'cloud'
+export const SYNC_MODE = 'websocket'
 export const ENABLE_WS_DEBUG = false
 export const WS_CONFIG = {
   env: 'prod-d9g87ibuu6e4a9bb1',

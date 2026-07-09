@@ -379,13 +379,19 @@ function createRoomStore(options = {}) {
     const room = requireRoom(client, message.requestId)
     if (!room) return
 
+    const payload = message.payload || {}
+    if (payload.room) {
+      mergeRoom(room, payload.room)
+      payload.room = toClientRoom(room)
+    }
+
     broadcast(room, {
-      type: message.payload && message.payload.type ? message.payload.type : 'broadcast',
+      type: payload.type ? payload.type : 'broadcast',
       requestId: message.requestId,
       roomId: room.roomId,
       from: getSender(client),
       actionSeq: bumpActionSeq(room),
-      payload: message.payload || {}
+      payload
     })
   }
 
@@ -500,6 +506,7 @@ function createRoomStore(options = {}) {
       countdownStartTime: data.countdownStartTime || 0,
       players: normalizePlayers(data.players),
       cards: Array.isArray(data.cards) ? data.cards.slice() : [],
+      sourceUpdateTime: Number(data.updateTime || 0),
       gameState,
       clients: new Map(),
       createdAt: Date.now(),
@@ -517,8 +524,13 @@ function createRoomStore(options = {}) {
     if (patch.status) room.status = patch.status
     if (patch.difficulty) room.difficulty = patch.difficulty
     if (patch.seed) room.seed = patch.seed
+    if (typeof patch.updateTime === 'number') {
+      room.sourceUpdateTime = Math.max(Number(room.sourceUpdateTime || 0), patch.updateTime)
+    }
     if (typeof patch.countdownStartTime === 'number') room.countdownStartTime = patch.countdownStartTime
-    if (Array.isArray(patch.cards)) room.cards = patch.cards.slice()
+    if (Array.isArray(patch.cards) && (patch.cards.length > 0 || !room.cards.length)) {
+      room.cards = patch.cards.slice()
+    }
     if (patch.players) {
       room.players = {
         host: {
@@ -556,7 +568,7 @@ function createRoomStore(options = {}) {
       players: room.players,
       cards: room.cards,
       gameState: room.gameState,
-      updateTime: room.updatedAt
+      updateTime: room.sourceUpdateTime || room.updatedAt
     }
   }
 

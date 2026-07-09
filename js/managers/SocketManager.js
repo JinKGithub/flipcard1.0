@@ -59,43 +59,50 @@ class SocketManager {
         this.handleSocketError(new Error('WEBSOCKET_CONNECT_TIMEOUT'))
       }, this.connectOptions.timeout || 10000)
 
-      const socketTask = this.createSocketTask(this.connectOptions)
-      if (!socketTask) {
-        clearTimeout(timeout)
-        this.status = SOCKET_STATUS.FALLBACK
-        reject(new Error('WEBSOCKET_UNAVAILABLE'))
-        return
-      }
+      this.createSocketTask(this.connectOptions)
+        .then((socketTask) => {
+          if (!socketTask) {
+            clearTimeout(timeout)
+            this.status = SOCKET_STATUS.FALLBACK
+            reject(new Error('WEBSOCKET_UNAVAILABLE'))
+            return
+          }
 
-      this.socket = socketTask
-      this.bindSocketEvents(socketTask, {
-        onOpen: () => {
-          clearTimeout(timeout)
-          this.status = SOCKET_STATUS.OPEN
-          this.reconnectAttempts = 0
-          this.lastPongAt = Date.now()
-          this.startHeartbeat()
-          this.flushQueue()
-          this.emit('open', {})
-          resolve(socketTask)
-        },
-        onError: (error) => {
+          this.socket = socketTask
+          this.bindSocketEvents(socketTask, {
+            onOpen: () => {
+              clearTimeout(timeout)
+              this.status = SOCKET_STATUS.OPEN
+              this.reconnectAttempts = 0
+              this.lastPongAt = Date.now()
+              this.startHeartbeat()
+              this.flushQueue()
+              this.emit('open', {})
+              resolve(socketTask)
+            },
+            onError: (error) => {
+              clearTimeout(timeout)
+              this.handleSocketError(error)
+              reject(error)
+            },
+            onMessage: (message) => this.handleSocketMessage(message),
+            onClose: (event) => this.handleSocketClose(event)
+          })
+        })
+        .catch((error) => {
           clearTimeout(timeout)
           this.handleSocketError(error)
           reject(error)
-        },
-        onMessage: (message) => this.handleSocketMessage(message),
-        onClose: (event) => this.handleSocketClose(event)
-      })
+        })
     })
   }
 
-  createSocketTask(options = {}) {
+  async createSocketTask(options = {}) {
     if (typeof wx === 'undefined') return null
 
     if (wx.cloud && wx.cloud.connectContainer) {
       try {
-        return wx.cloud.connectContainer({
+        const result = await wx.cloud.connectContainer({
           config: {
             env: options.env
           },
@@ -104,6 +111,7 @@ class SocketManager {
           header: options.header || {},
           method: 'GET'
         })
+        return result && result.socketTask ? result.socketTask : result
       } catch (error) {
         this.debug('connectContainer create failed', error)
       }

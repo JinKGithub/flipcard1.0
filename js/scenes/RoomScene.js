@@ -877,11 +877,14 @@ class RoomScene {
       guestId: room.guestId || '',
       difficulty: room.difficulty || 'EASY',
       status: room.status || ROOM_STATUS.WAITING,
+      seed: room.seed || 0,
+      updateTime: room.updateTime || 0,
       countdownStartTime: room.countdownStartTime || 0,
       players: {
         host: room.players && room.players.host ? room.players.host : null,
         guest: room.players && room.players.guest ? room.players.guest : null
       },
+      cards: Array.isArray(room.cards) ? room.cards.slice() : [],
       gameState: room.gameState || {}
     }
 
