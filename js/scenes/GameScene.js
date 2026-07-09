@@ -1,4 +1,4 @@
-import GameLogic from '../managers/GameLogic.js'
+import GameLogic, { GAME_FLOW_STATE } from '../managers/GameLogic.js'
 import InputManager from '../managers/InputManager.js'
 import AudioManager from '../managers/AudioManager.js'
 import UserManager from '../managers/UserManager.js'
@@ -94,7 +94,13 @@ class GameScene {
   }
 
   update(deltaTime) {
-    if (this.logic) this.logic.update(deltaTime)
+    if (this.logic) {
+      if (this.isServerAuthoritative()) {
+        this.updateServerAuthoritativeState(deltaTime)
+      } else {
+        this.logic.update(deltaTime)
+      }
+    }
     if (this.pauseButton) this.pauseButton.update(deltaTime)
     this.updatePracticeAI(deltaTime)
   }
@@ -156,6 +162,7 @@ class GameScene {
     })
 
     this.logic.on('cardFlip', (payload) => {
+      if (this.isServerAuthoritative()) return
       this.flipCount += 1
       this.audioManager.play('FLIP')
       if (this.shouldUseSocketSync() && this.socketManager.isOpen()) {
@@ -165,6 +172,7 @@ class GameScene {
       this.uploadGameState({}, true)
     })
     this.logic.on('matchSuccess', () => {
+      if (this.isServerAuthoritative()) return
       this.audioManager.play('MATCH')
       // The gameEnd event immediately uploads the final matched deck and ended
       // status. Avoid a concurrent "playing" upload that could arrive later.
@@ -172,11 +180,16 @@ class GameScene {
       this.uploadGameState({}, true, { resetTurnTimer: true })
     })
     this.logic.on('matchFail', () => {
+      if (this.isServerAuthoritative()) return
       this.audioManager.play('FAIL')
       this.uploadGameState({}, true, { resetTurnTimer: true })
     })
-    this.logic.on('turnTimeout', () => this.uploadGameState({}, true, { resetTurnTimer: true }))
+    this.logic.on('turnTimeout', () => {
+      if (this.isServerAuthoritative()) return
+      this.uploadGameState({}, true, { resetTurnTimer: true })
+    })
     this.logic.on('gameEnd', (payload) => {
+      if (this.isServerAuthoritative()) return
       this.uploadGameState({
         status: ROOM_STATUS.ENDED,
         gameState: {
@@ -234,6 +247,12 @@ class GameScene {
   handleCardTap(point) {
     const card = this.cardGrid.hitTest(point.x, point.y)
     if (!card || !this.logic) return
+
+    if (this.isServerAuthoritative()) {
+      this.sendSocketCardTap(card)
+      return
+    }
+
     this.logic.flipCard(card)
   }
 
@@ -295,17 +314,51 @@ class GameScene {
     return SYNC_MODE === 'websocket' && this.mode === 'battle' && Boolean(this.room && this.room._id)
   }
 
+  isServerAuthoritative() {
+    return this.shouldUseSocketSync() && this.usingSocketSync && this.socketManager.isOpen()
+  }
+
+  updateServerAuthoritativeState(deltaTime) {
+    if (this.cardGrid) this.cardGrid.update(deltaTime)
+
+    if (!this.logic || !this.room || !this.room.gameState) return
+    if (this.logic.state === GAME_FLOW_STATE.WAITING || this.logic.state === GAME_FLOW_STATE.END) return
+    if (this.room.gameState.state === GAME_FLOW_STATE.JUDGING) return
+
+    this.logic.syncTurnTimer(
+      this.room.gameState.turnStartTime,
+      this.room.gameState.turnDeadline
+    )
+  }
+
+  canSendServerCardTap(card) {
+    if (!card || !this.logic || !this.room || !this.room.gameState) return false
+    if (this.logic.currentPlayer !== this.myRole) return false
+    if (this.room.gameState.state === GAME_FLOW_STATE.JUDGING) return false
+    if (this.logic.flippedCards.length >= 2) return false
+    if (card.state !== CARD_STATE.HIDDEN || card.locked || card.isMatched()) return false
+    if (this.logic.flippedCards.some((flippedCard) => flippedCard.id === card.id)) return false
+    return true
+  }
+
+  sendSocketCardTap(card) {
+    if (!this.canSendServerCardTap(card)) return
+
+    this.socketManager.send('flipCard', {
+      cardId: card.id
+    }, this.getSocketSendOptions()).catch(() => this.fallbackToCloudSync())
+  }
+
   startSocketSync() {
     this.stopSocketSync()
     this.usingSocketSync = true
 
     const applyRoomMessage = (message = {}) => {
       if (!this.shouldApplySocketMessage(message)) return
-      const from = message.from || {}
-      if (from.role === this.myRole && message.type !== 'roomSnapshot') return
 
       const room = message.payload && message.payload.room
       if (room) {
+        this.playServerSyncAudio(message)
         this.applyRemoteRoom(room)
       }
     }
@@ -340,7 +393,7 @@ class GameScene {
 
     const fallbackToCloud = () => this.fallbackToCloudSync()
 
-    ;['roomSnapshot', 'gameStart', 'gameStateUpdate', 'turnResult'].forEach((type) => {
+    ;['roomSnapshot', 'gameStart', 'gameStateUpdate', 'turnResult', 'flipCard'].forEach((type) => {
       this.socketOffs.push(this.socketManager.on(type, applyRoomMessage))
     })
     this.socketOffs.push(this.socketManager.on('flipCard', applyFlipMessage))
@@ -402,6 +455,23 @@ class GameScene {
 
     this.lastSocketActionSeq = seq
     return true
+  }
+
+  playServerSyncAudio(message = {}) {
+    const payload = message.payload || {}
+
+    if (message.type === 'flipCard') {
+      this.audioManager.play('FLIP')
+      return
+    }
+
+    if (message.type === 'turnResult') {
+      if (payload.matched) {
+        this.audioManager.play('MATCH')
+      } else if (payload.cards && payload.cards.length) {
+        this.audioManager.play('FAIL')
+      }
+    }
   }
 
   uploadSocketFlip(payload = {}) {
@@ -532,10 +602,7 @@ class GameScene {
       const card = this.cardGrid.getCardById(remoteCard.id)
       if (!card) return
 
-      this.clearCardAnimation(card)
-      card.state = remoteCard.state || CARD_STATE.HIDDEN
-      card.locked = false
-      card.flipProgress = 0
+      this.applyRemoteCardState(card, remoteCard.state || CARD_STATE.HIDDEN)
     })
 
     if (this.room.gameState && this.logic) {
@@ -547,7 +614,9 @@ class GameScene {
         .map((cardId) => this.cardGrid.getCardById(cardId))
         .filter(Boolean)
 
-      if (this.shouldKeepLocalJudging(this.room.gameState)) {
+      if (this.isServerAuthoritative()) {
+        this.applyServerLogicState(this.room.gameState)
+      } else if (this.shouldKeepLocalJudging(this.room.gameState)) {
         this.keepLocalJudging()
       } else {
         this.logic.updateTurnState()
@@ -605,6 +674,66 @@ class GameScene {
     card.scaleY = 1
     card.rotation = 0
     card.isMatchedAnimating = false
+  }
+
+  applyRemoteCardState(card, nextState) {
+    if (!card) return
+
+    const currentState = card.state || CARD_STATE.HIDDEN
+    const activeAnimations = card.animations &&
+      Array.isArray(card.animations.animations) &&
+      card.animations.animations.length > 0
+
+    if (currentState === nextState) {
+      if (!activeAnimations) {
+        card.state = nextState
+        card.locked = false
+        card.flipProgress = 0
+      }
+      return
+    }
+
+    this.clearCardAnimation(card)
+    card.locked = false
+    card.flipProgress = 0
+
+    if (currentState === CARD_STATE.HIDDEN && nextState === CARD_STATE.REVEALED) {
+      card.state = CARD_STATE.HIDDEN
+      card.reveal()
+      return
+    }
+
+    if (nextState === CARD_STATE.HIDDEN) {
+      card.state = CARD_STATE.REVEALED
+      card.hide()
+      return
+    }
+
+    if (nextState === CARD_STATE.MATCHED) {
+      card.state = CARD_STATE.REVEALED
+      card.matched()
+      return
+    }
+
+    card.state = nextState
+  }
+
+  applyServerLogicState(gameState = {}) {
+    if (!this.logic) return
+
+    if (gameState.state === GAME_FLOW_STATE.JUDGING) {
+      this.logic.state = GAME_FLOW_STATE.JUDGING
+      this.logic.judgeElapsed = 0
+      this.logic.pendingResult = null
+      return
+    }
+
+    if (gameState.state === GAME_FLOW_STATE.END || this.room.status === ROOM_STATUS.ENDED) {
+      this.logic.state = GAME_FLOW_STATE.END
+      return
+    }
+
+    this.logic.updateTurnState()
   }
 
   shouldKeepLocalJudging(gameState = {}) {

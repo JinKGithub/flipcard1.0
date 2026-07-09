@@ -9,6 +9,7 @@ const DIFFICULTY_CONFIG = {
 }
 const DIFFICULTIES = Object.keys(DIFFICULTY_CONFIG)
 const TURN_DURATION_MS = 15 * 1000
+const JUDGE_DELAY_MS = 1000
 const CARD_IMAGES = Array.from({ length: 18 }, (_, index) => {
   return `assets/images/cards/card-${index + 1}.png`
 })
@@ -71,7 +72,7 @@ function createRoomStore(options = {}) {
     })
 
     if (room.clients.size === 0 && room.status !== 'playing') {
-      cancelCountdown(room)
+      clearBattleTimers(room)
       rooms.delete(room.roomId)
     }
   }
@@ -183,6 +184,7 @@ function createRoomStore(options = {}) {
     }
 
     ensureCountdownTimer(room, client, message.requestId)
+    ensureBattleTimers(room)
 
     sendSnapshot(client, message.requestId)
     broadcast(room, {
@@ -291,10 +293,16 @@ function createRoomStore(options = {}) {
       return
     }
 
-    const result = startGameOnce(room, getSender(client), message.requestId)
-    if (!result.ok) {
-      sendError(client, result.code, result.message, message.requestId)
-    }
+    send(client, {
+      type: 'gameStart',
+      requestId: message.requestId,
+      roomId: room.roomId,
+      from: getSystemSender(),
+      actionSeq: Number(room.gameState && room.gameState.actionSeq || 0),
+      payload: {
+        room: toClientRoom(room)
+      }
+    })
   }
 
   function flipCard(client, message) {
@@ -312,15 +320,53 @@ function createRoomStore(options = {}) {
       return
     }
 
-    const state = message.payload.state || 'revealed'
     const card = room.cards.find((item) => item.id === cardId)
-    if (card) card.state = state
+    if (!card) {
+      sendError(client, 'CARD_NOT_FOUND', 'Card does not exist.', message.requestId)
+      return
+    }
 
-    room.gameState.flippedCards = Array.isArray(message.payload.flippedCards)
-      ? message.payload.flippedCards
-      : unique([...(room.gameState.flippedCards || []), cardId])
-    room.gameState.flipCount = Number(message.payload.flipCount || room.gameState.flipCount || 0)
+    const gameState = room.gameState || {}
+    const currentPlayer = gameState.currentPlayer || 'host'
+    const flippedCards = Array.isArray(gameState.flippedCards)
+      ? gameState.flippedCards.slice()
+      : []
+
+    if (client.role !== currentPlayer) {
+      sendError(client, 'NOT_YOUR_TURN', 'It is not your turn.', message.requestId)
+      return
+    }
+
+    if (room.judgeTimer || gameState.state === 'JUDGING') {
+      sendError(client, 'TURN_JUDGING', 'Turn is being judged.', message.requestId)
+      return
+    }
+
+    if (flippedCards.length >= 2) {
+      sendError(client, 'TURN_FULL', 'This turn already has two cards.', message.requestId)
+      return
+    }
+
+    if (flippedCards.includes(cardId) || card.state !== 'hidden') {
+      sendError(client, 'CARD_UNAVAILABLE', 'Card cannot be flipped.', message.requestId)
+      return
+    }
+
+    card.state = 'revealed'
+    flippedCards.push(cardId)
+    room.gameState = {
+      ...gameState,
+      state: flippedCards.length === 2 ? 'JUDGING' : '',
+      flippedCards,
+      flipCount: Number(gameState.flipCount || 0) + 1,
+      timer: getRemainingSeconds(room)
+    }
     room.updatedAt = Date.now()
+
+    if (flippedCards.length === 2) {
+      cancelTurnTimer(room)
+      scheduleJudgement(room)
+    }
 
     broadcast(room, {
       type: 'flipCard',
@@ -330,9 +376,10 @@ function createRoomStore(options = {}) {
       actionSeq: bumpActionSeq(room),
       payload: {
         cardId,
-        state,
+        state: card.state,
         flippedCards: room.gameState.flippedCards,
-        flipCount: room.gameState.flipCount
+        flipCount: room.gameState.flipCount,
+        room: toClientRoom(room)
       }
     })
   }
@@ -341,59 +388,16 @@ function createRoomStore(options = {}) {
     const room = requireRoom(client, message.requestId)
     if (!room) return
 
-    const payload = message.payload || {}
-    if (payload.room) {
-      mergeRoom(room, payload.room)
-    } else {
-      if (Array.isArray(payload.cards)) {
-        payload.cards.forEach((cardId) => {
-          const card = room.cards.find((item) => item.id === cardId)
-          if (card) card.state = payload.matched ? 'matched' : 'hidden'
-        })
-      }
-      room.gameState = {
-        ...room.gameState,
-        ...(payload.gameState || {}),
-        scores: payload.scores || room.gameState.scores,
-        currentPlayer: payload.currentPlayer || room.gameState.currentPlayer,
-        matchedCount: Number(payload.matchedCount || room.gameState.matchedCount || 0),
-        flippedCards: []
-      }
-    }
-
-    room.updatedAt = Date.now()
-    broadcast(room, {
-      type: 'turnResult',
-      requestId: message.requestId,
-      roomId: room.roomId,
-      from: getSender(client),
-      actionSeq: bumpActionSeq(room),
-      payload: {
-        ...payload,
-        room: toClientRoom(room)
-      }
-    })
+    sendError(client, 'SERVER_AUTHORITATIVE', 'Turn result is decided by server.', message.requestId)
+    sendSnapshot(client, message.requestId)
   }
 
   function gameStateUpdate(client, message) {
     const room = requireRoom(client, message.requestId)
     if (!room) return
 
-    const payload = message.payload || {}
-    const roomPatch = payload.room || payload.patch || {}
-    mergeRoom(room, roomPatch)
-    room.updatedAt = Date.now()
-
-    broadcast(room, {
-      type: 'gameStateUpdate',
-      requestId: message.requestId,
-      roomId: room.roomId,
-      from: getSender(client),
-      actionSeq: bumpActionSeq(room),
-      payload: {
-        room: toClientRoom(room)
-      }
-    })
+    sendError(client, 'SERVER_AUTHORITATIVE', 'Game state is controlled by server.', message.requestId)
+    sendSnapshot(client, message.requestId)
   }
 
   function relayBroadcast(client, message) {
@@ -514,6 +518,33 @@ function createRoomStore(options = {}) {
     room.countdownTimer = null
   }
 
+  function cancelTurnTimer(room) {
+    if (!room || !room.turnTimer) return
+    clearTimeout(room.turnTimer)
+    room.turnTimer = null
+  }
+
+  function cancelJudgeTimer(room) {
+    if (!room || !room.judgeTimer) return
+    clearTimeout(room.judgeTimer)
+    room.judgeTimer = null
+  }
+
+  function clearBattleTimers(room) {
+    cancelCountdown(room)
+    cancelTurnTimer(room)
+    cancelJudgeTimer(room)
+  }
+
+  function ensureBattleTimers(room) {
+    if (!room || room.status !== 'playing') return
+    if (room.gameState && room.gameState.state === 'JUDGING') {
+      if (!room.judgeTimer) scheduleJudgement(room)
+      return
+    }
+    if (!room.turnTimer) scheduleTurnTimeout(room)
+  }
+
   function startGameOnce(room, sender = getSystemSender(), requestId = '') {
     if (!room) {
       return { ok: false, code: 'ROOM_NOT_JOINED', message: 'Client has not joined a room.' }
@@ -539,6 +570,7 @@ function createRoomStore(options = {}) {
       room.countdownStartTime = 0
       room.gameState = {
         ...(room.gameState || {}),
+        state: '',
         currentPlayer: (room.gameState && room.gameState.currentPlayer) || randomRole(),
         flippedCards: [],
         matchedCount: 0,
@@ -560,6 +592,7 @@ function createRoomStore(options = {}) {
     room.status = 'playing'
     room.updatedAt = Date.now()
     room.gameState.actionSeq = Number(room.gameState.actionSeq || 0)
+    scheduleTurnTimeout(room)
 
     broadcast(room, {
       type: 'gameStart',
@@ -573,6 +606,207 @@ function createRoomStore(options = {}) {
     })
 
     return { ok: true }
+  }
+
+  function scheduleJudgement(room) {
+    cancelJudgeTimer(room)
+
+    room.judgeTimer = setTimeout(() => {
+      room.judgeTimer = null
+      resolveJudgement(room)
+    }, JUDGE_DELAY_MS)
+  }
+
+  function resolveJudgement(room) {
+    if (!room || room.status !== 'playing') return
+
+    const flippedIds = Array.isArray(room.gameState.flippedCards)
+      ? room.gameState.flippedCards.slice(0, 2)
+      : []
+    if (flippedIds.length < 2) {
+      room.gameState.state = ''
+      scheduleTurnTimeout(room)
+      return
+    }
+
+    const cards = flippedIds.map((cardId) => room.cards.find((card) => card.id === cardId)).filter(Boolean)
+    if (cards.length < 2) {
+      room.gameState.flippedCards = []
+      room.gameState.state = ''
+      resetTurnTimer(room, room.gameState.currentPlayer || 'host')
+      scheduleTurnTimeout(room)
+      broadcastTurnResult(room, {
+        matched: false,
+        cards: flippedIds,
+        reason: 'invalid_cards'
+      })
+      return
+    }
+
+    const currentPlayer = room.gameState.currentPlayer || 'host'
+    const matched = cards[0].pairId && cards[0].pairId === cards[1].pairId
+    const scores = {
+      host: Number(room.gameState.scores && room.gameState.scores.host || 0),
+      guest: Number(room.gameState.scores && room.gameState.scores.guest || 0)
+    }
+    let nextPlayer = currentPlayer
+
+    if (matched) {
+      cards.forEach((card) => {
+        card.state = 'matched'
+      })
+      scores[currentPlayer] = Number(scores[currentPlayer] || 0) + 1
+      room.gameState.matchedCount = Number(room.gameState.matchedCount || 0) + 1
+    } else {
+      cards.forEach((card) => {
+        if (card.state !== 'matched') card.state = 'hidden'
+      })
+      nextPlayer = switchRole(currentPlayer)
+    }
+
+    room.gameState = {
+      ...room.gameState,
+      state: '',
+      currentPlayer: nextPlayer,
+      flippedCards: [],
+      matchedCount: Number(room.gameState.matchedCount || 0),
+      scores
+    }
+
+    if (isDeckComplete(room)) {
+      endCompletedGame(room)
+      broadcastTurnResult(room, {
+        matched,
+        cards: flippedIds,
+        player: currentPlayer,
+        nextPlayer,
+        completed: true
+      })
+      return
+    }
+
+    resetTurnTimer(room, nextPlayer)
+    scheduleTurnTimeout(room)
+    broadcastTurnResult(room, {
+      matched,
+      cards: flippedIds,
+      player: currentPlayer,
+      nextPlayer
+    })
+  }
+
+  function scheduleTurnTimeout(room) {
+    cancelTurnTimer(room)
+
+    if (!room || room.status !== 'playing') return
+
+    const now = Date.now()
+    const deadline = Number(room.gameState && room.gameState.turnDeadline || 0)
+    const delay = Math.max(0, (deadline || now + TURN_DURATION_MS) - now)
+    room.turnTimer = setTimeout(() => {
+      room.turnTimer = null
+      handleTurnTimeout(room)
+    }, delay)
+  }
+
+  function getRemainingSeconds(room, now = Date.now()) {
+    const deadline = Number(room && room.gameState && room.gameState.turnDeadline || 0)
+    if (!deadline) return 15
+    return Math.max(0, Math.ceil((deadline - now) / 1000))
+  }
+
+  function handleTurnTimeout(room) {
+    if (!room || room.status !== 'playing') return
+    if (room.judgeTimer || room.gameState.state === 'JUDGING') return
+
+    const currentPlayer = room.gameState.currentPlayer || 'host'
+    const flippedIds = Array.isArray(room.gameState.flippedCards)
+      ? room.gameState.flippedCards.slice()
+      : []
+
+    flippedIds.forEach((cardId) => {
+      const card = room.cards.find((item) => item.id === cardId)
+      if (card && card.state !== 'matched') card.state = 'hidden'
+    })
+
+    const nextPlayer = switchRole(currentPlayer)
+    room.gameState = {
+      ...room.gameState,
+      state: '',
+      currentPlayer: nextPlayer,
+      flippedCards: []
+    }
+    resetTurnTimer(room, nextPlayer)
+    scheduleTurnTimeout(room)
+    broadcastTurnResult(room, {
+      matched: false,
+      timeout: true,
+      cards: flippedIds,
+      player: currentPlayer,
+      nextPlayer
+    })
+  }
+
+  function resetTurnTimer(room, currentPlayer) {
+    const now = Date.now()
+    const previousVersion = Number(room.gameState && room.gameState.turnVersion || 0)
+
+    room.gameState = {
+      ...(room.gameState || {}),
+      currentPlayer,
+      timer: 15,
+      turnStartTime: now,
+      turnDeadline: now + TURN_DURATION_MS,
+      serverTime: now,
+      turnVersion: previousVersion + 1
+    }
+    room.updatedAt = now
+  }
+
+  function broadcastTurnResult(room, payload = {}) {
+    room.updatedAt = Date.now()
+    broadcast(room, {
+      type: 'turnResult',
+      roomId: room.roomId,
+      from: getSystemSender(),
+      actionSeq: bumpActionSeq(room),
+      payload: {
+        ...payload,
+        room: toClientRoom(room)
+      }
+    })
+  }
+
+  function endCompletedGame(room) {
+    clearBattleTimers(room)
+
+    const scores = room.gameState.scores || {}
+    const hostScore = Number(scores.host || 0)
+    const guestScore = Number(scores.guest || 0)
+    const winner = hostScore > guestScore ? 'host' : guestScore > hostScore ? 'guest' : null
+    const now = Date.now()
+    const startTime = Number(room.gameState.startTime || now)
+
+    room.status = 'ended'
+    room.gameState = {
+      ...room.gameState,
+      state: 'END',
+      winner,
+      endReason: 'completed',
+      duration: Math.max(0, Math.floor((now - startTime) / 1000)),
+      flippedCards: []
+    }
+    room.updatedAt = now
+  }
+
+  function isDeckComplete(room) {
+    return Array.isArray(room.cards) &&
+      room.cards.length > 0 &&
+      room.cards.every((card) => card.state === 'matched')
+  }
+
+  function switchRole(role) {
+    return role === 'host' ? 'guest' : 'host'
   }
 
   function areBothPlayersReady(room) {
@@ -681,6 +915,8 @@ function createRoomStore(options = {}) {
       gameState,
       clients: new Map(),
       countdownTimer: null,
+      turnTimer: null,
+      judgeTimer: null,
       createdAt: Date.now(),
       updatedAt: Date.now()
     }
@@ -803,7 +1039,7 @@ function createRoomStore(options = {}) {
   }
 
   function markForfeit(room, leaveRole) {
-    cancelCountdown(room)
+    clearBattleTimers(room)
     const winner = leaveRole === 'host' ? 'guest' : 'host'
     room.status = 'ended'
     room.gameState = {
