@@ -38,15 +38,21 @@ function createRoomStore(options = {}) {
 
     room.clients.delete(socketId)
     markPlayerOnline(room, client.role, false, '')
+    if (room.status === 'playing') {
+      markForfeit(room, client.role)
+    }
     room.updatedAt = Date.now()
 
     broadcast(room, {
       type: 'playerOffline',
       roomId: room.roomId,
       from: getSender(client),
+      actionSeq: bumpActionSeq(room),
       payload: {
         role: client.role,
-        players: room.players
+        players: room.players,
+        status: room.status,
+        room: toClientRoom(room)
       }
     })
 
@@ -180,6 +186,9 @@ function createRoomStore(options = {}) {
 
     markPlayerOnline(room, client.role, false, '')
     room.clients.delete(client.socketId)
+    if (room.status === 'playing') {
+      markForfeit(room, client.role)
+    }
     room.updatedAt = Date.now()
 
     broadcast(room, {
@@ -187,10 +196,12 @@ function createRoomStore(options = {}) {
       requestId: message.requestId,
       roomId: room.roomId,
       from: getSender(client),
+      actionSeq: bumpActionSeq(room),
       payload: {
         role: client.role,
         players: room.players,
-        status: room.status
+        status: room.status,
+        room: toClientRoom(room)
       }
     })
 
@@ -628,6 +639,26 @@ function createRoomStore(options = {}) {
       online,
       socketId
     }
+  }
+
+  function markForfeit(room, leaveRole) {
+    const winner = leaveRole === 'host' ? 'guest' : 'host'
+    room.status = 'ended'
+    room.gameState = {
+      ...(room.gameState || {}),
+      winner,
+      endReason: leaveRole === 'host' ? 'host_leave' : 'guest_leave',
+      flippedCards: []
+    }
+    room.cards = (room.cards || []).map((card) => {
+      if (card.state === 'revealed') {
+        return {
+          ...card,
+          state: 'hidden'
+        }
+      }
+      return card
+    })
   }
 
   function normalizeRole(role) {

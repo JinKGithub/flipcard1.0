@@ -329,7 +329,13 @@ class GameScene {
     const handleOpponentLeave = (message = {}) => {
       const from = message.from || {}
       if (!from.role || from.role === this.myRole) return
-      this.fetchCloudRoomAndApply()
+      const room = message.payload && message.payload.room
+      if (room) {
+        this.applyRemoteRoom(room, { force: true })
+        return
+      }
+
+      this.handleOpponentLeave(this.createOpponentLeaveRoom(from.role))
     }
 
     const fallbackToCloud = () => this.fallbackToCloudSync()
@@ -339,6 +345,7 @@ class GameScene {
     })
     this.socketOffs.push(this.socketManager.on('flipCard', applyFlipMessage))
     this.socketOffs.push(this.socketManager.on('playerLeave', handleOpponentLeave))
+    this.socketOffs.push(this.socketManager.on('playerOffline', handleOpponentLeave))
     this.socketOffs.push(this.socketManager.on('fallback', fallbackToCloud))
     this.socketOffs.push(this.socketManager.on('socketError', fallbackToCloud))
 
@@ -648,6 +655,12 @@ class GameScene {
 
     if (this.room && this.room._id && this.mode === 'battle') {
       try {
+        if (this.shouldUseSocketSync() && this.socketManager.isOpen()) {
+          await this.socketManager.send('leaveRoom', {}, this.getSocketSendOptions())
+        }
+      } catch (error) {}
+
+      try {
         await this.networkManager.cloudDB.callFunction('leaveRoom', { roomId: this.room._id })
       } catch (error) {}
     }
@@ -666,6 +679,32 @@ class GameScene {
         : ''
 
     return Boolean(leaveRole && leaveRole !== this.myRole)
+  }
+
+  createOpponentLeaveRoom(leaveRole) {
+    const winner = leaveRole === PLAYER_ROLE.HOST ? PLAYER_ROLE.GUEST : PLAYER_ROLE.HOST
+    const gameState = {
+      ...(this.room.gameState || {}),
+      winner,
+      endReason: leaveRole === PLAYER_ROLE.HOST ? 'host_leave' : 'guest_leave',
+      flippedCards: [],
+      duration: Math.floor((Date.now() - this.startTime) / 1000),
+      flipCount: this.flipCount,
+      scores: {
+        host: this.players.host ? this.players.host.score : 0,
+        guest: this.players.guest ? this.players.guest.score : 0
+      }
+    }
+
+    return {
+      ...this.room,
+      status: ROOM_STATUS.ENDED,
+      cards: this.cardGrid.toJSON().map((card) => ({
+        ...card,
+        state: card.state === CARD_STATE.REVEALED ? CARD_STATE.HIDDEN : card.state
+      })),
+      gameState
+    }
   }
 
   async handleOpponentLeave(room) {
