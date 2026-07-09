@@ -40,24 +40,29 @@ class MenuScene {
     this.rankError = ''
     this.showHomeRankPanel = false
     this.layout = {}
+    this.active = false
+    this.enterToken = 0
   }
 
   async enter() {
+    this.active = true
+    const enterToken = ++this.enterToken
     this.user = this.userManager.getCurrentUser()
-    this.preloadUserAvatar(this.user)
+    this.preloadUserAvatar(this.user, enterToken)
     this.elapsed = 0
     this.createLayout()
     this.registerInputs()
     this.audioManager.playBgm()
     this.warmupSocket()
-    if (this.showHomeRankPanel) this.loadHomeRanks()
+    if (this.showHomeRankPanel) this.loadHomeRanks(enterToken)
 
     const user = await this.userManager.init()
+    if (!this.isActiveEnter(enterToken)) return
     this.user = user
-    this.preloadUserAvatar(user)
+    this.preloadUserAvatar(user, enterToken)
     this.createLayout()
     this.registerInputs()
-    if (this.showHomeRankPanel) this.loadHomeRanks()
+    if (this.showHomeRankPanel) this.loadHomeRanks(enterToken)
   }
 
   warmupSocket() {
@@ -65,7 +70,13 @@ class MenuScene {
     this.socketManager.connect().catch(() => {})
   }
 
+  isActiveEnter(token) {
+    return this.active && token === this.enterToken
+  }
+
   exit() {
+    this.active = false
+    this.enterToken += 1
     this.unregisterInputs()
   }
 
@@ -226,6 +237,7 @@ class MenuScene {
   }
 
   registerInputs() {
+    if (!this.active) return
     this.unregisterInputs()
     if (this.settingsButton) this.inputManager.register(this.settingsButton, { priority: 10 })
     if (this.authButton) this.inputManager.register(this.authButton, { priority: 8 })
@@ -239,10 +251,13 @@ class MenuScene {
   }
 
   async requestProfile() {
+    if (!this.active) return
+    const enterToken = this.enterToken
     this.authMessage = '正在请求授权...'
     const user = await this.userManager.requestUserProfile()
+    if (!this.isActiveEnter(enterToken)) return
     this.user = user
-    this.preloadUserAvatar(user)
+    this.preloadUserAvatar(user, enterToken)
     this.authMessage = user.authorized
       ? '资料已更新'
       : `授权失败：${user.authError || this.userManager.lastAuthError || '未获得用户信息'}`
@@ -252,7 +267,7 @@ class MenuScene {
     this.registerInputs()
   }
 
-  preloadUserAvatar(user = this.user) {
+  preloadUserAvatar(user = this.user, enterToken = this.enterToken) {
     const avatar = user && (user.avatar || user.avatarUrl)
     if (!avatar || avatar === UI_IMAGES.DEFAULT_AVATAR) return
     if (this.loader.hasImage && this.loader.hasImage(avatar)) return
@@ -261,6 +276,7 @@ class MenuScene {
     this.loader.loadImageLazy(avatar)
       .then(() => {})
       .catch(() => {
+        if (!this.isActiveEnter(enterToken)) return
         this.authMessage = '头像加载失败，已使用默认头像'
         this.authMessageTimer = 2200
       })
@@ -460,7 +476,7 @@ class MenuScene {
     ctx.fillText('>', button.width - button.height * 0.58, button.height / 2)
   }
 
-  async loadHomeRanks() {
+  async loadHomeRanks(enterToken = this.enterToken) {
     if (this.rankLoading) return
 
     this.rankLoading = true
@@ -468,6 +484,7 @@ class MenuScene {
 
     try {
       const rows = await this.cloudDB.query('ranks', {}, { limit: 100 })
+      if (!this.isActiveEnter(enterToken)) return
       const ranks = (rows || [])
         .sort((a, b) => this.compareHomeRank(a, b))
         .map((item, index) => this.normalizeHomeRankItem(item, index + 1))
@@ -602,6 +619,7 @@ class MenuScene {
   }
 
   safeSwitch(sceneKey, params = {}) {
+    if (!this.active) return
     if (!this.sceneManager) return
     try {
       this.sceneManager.switchTo(sceneKey, params)
@@ -617,6 +635,7 @@ class MenuScene {
   }
 
   openSettings() {
+    if (!this.active) return
     const settings = this.audioManager.getSettings()
     const musicLabel = settings.musicEnabled ? '音乐：开' : '音乐：关'
     const soundLabel = settings.soundEnabled ? '音效：开' : '音效：关'
