@@ -1,6 +1,7 @@
 import ParticleSystem from '../engine/ParticleSystem.js'
 import AudioManager from '../managers/AudioManager.js'
 import InputManager from '../managers/InputManager.js'
+import SocketManager from '../managers/SocketManager.js'
 import UserManager from '../managers/UserManager.js'
 import CloudDB from '../utils/CloudDB.js'
 import ResourceLoader from '../utils/ResourceLoader.js'
@@ -10,6 +11,7 @@ import {
   FONTS,
   HOME_IMAGES,
   SCENE_KEYS,
+  SYNC_MODE,
   UI_IMAGES
 } from '../utils/config.js'
 
@@ -20,6 +22,7 @@ class MenuScene {
     this.inputManager = options.inputManager || InputManager.getInstance()
     this.userManager = options.userManager || UserManager.getInstance()
     this.audioManager = options.audioManager || AudioManager.getInstance()
+    this.socketManager = options.socketManager || SocketManager.getInstance()
     this.cloudDB = options.cloudDB || CloudDB.getInstance()
     this.loader = options.loader || new ResourceLoader()
 
@@ -46,6 +49,7 @@ class MenuScene {
     this.createLayout()
     this.registerInputs()
     this.audioManager.playBgm()
+    this.warmupSocket()
     if (this.showHomeRankPanel) this.loadHomeRanks()
 
     const user = await this.userManager.init()
@@ -54,6 +58,11 @@ class MenuScene {
     this.createLayout()
     this.registerInputs()
     if (this.showHomeRankPanel) this.loadHomeRanks()
+  }
+
+  warmupSocket() {
+    if (SYNC_MODE !== 'websocket') return
+    this.socketManager.connect().catch(() => {})
   }
 
   exit() {

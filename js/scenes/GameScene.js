@@ -49,6 +49,7 @@ class GameScene {
     this.lastAppliedUpdateTime = 0
     this.lastTurnVersion = 0
     this.lastTurnStartTime = 0
+    this.lastSocketActionSeq = 0
     this.practiceAiElapsed = 0
     this.opponentLeaveHandled = false
     this.leavingRoom = false
@@ -63,6 +64,7 @@ class GameScene {
     this.lastAppliedUpdateTime = this.room.updateTime || 0
     this.lastTurnVersion = this.room.gameState.turnVersion || 0
     this.lastTurnStartTime = this.room.gameState.turnStartTime || 0
+    this.lastSocketActionSeq = Number(this.room.gameState.actionSeq || 0)
     this.opponentLeaveHandled = false
     this.leavingRoom = false
 
@@ -298,6 +300,7 @@ class GameScene {
     this.usingSocketSync = true
 
     const applyRoomMessage = (message = {}) => {
+      if (!this.shouldApplySocketMessage(message)) return
       const from = message.from || {}
       if (from.role === this.myRole && message.type !== 'roomSnapshot') return
 
@@ -308,6 +311,7 @@ class GameScene {
     }
 
     const applyFlipMessage = (message = {}) => {
+      if (!this.shouldApplySocketMessage(message)) return
       const from = message.from || {}
       if (from.role === this.myRole) return
 
@@ -376,6 +380,21 @@ class GameScene {
       role: this.myRole,
       openid: user.openid || ''
     }
+  }
+
+  shouldApplySocketMessage(message = {}) {
+    const room = message.payload && message.payload.room
+    const seq = Number(
+      message.actionSeq ||
+      (room && room.gameState && room.gameState.actionSeq) ||
+      0
+    )
+
+    if (!seq) return true
+    if (seq < this.lastSocketActionSeq) return false
+
+    this.lastSocketActionSeq = seq
+    return true
   }
 
   uploadSocketFlip(payload = {}) {
@@ -505,6 +524,7 @@ class GameScene {
       const card = this.cardGrid.getCardById(remoteCard.id)
       if (!card) return
 
+      this.clearCardAnimation(card)
       card.state = remoteCard.state || CARD_STATE.HIDDEN
       card.locked = false
       card.flipProgress = 0
@@ -567,6 +587,16 @@ class GameScene {
         localCard.position.row !== remoteCard.position.row ||
         localCard.position.col !== remoteCard.position.col
     })
+  }
+
+  clearCardAnimation(card) {
+    if (card.animations && typeof card.animations.clear === 'function') {
+      card.animations.clear(false)
+    }
+    card.scaleX = 1
+    card.scaleY = 1
+    card.rotation = 0
+    card.isMatchedAnimating = false
   }
 
   shouldKeepLocalJudging(gameState = {}) {

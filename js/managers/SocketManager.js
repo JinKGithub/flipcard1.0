@@ -33,6 +33,7 @@ class SocketManager {
     this.lastPongAt = 0
     this.manualClose = false
     this.connectOptions = null
+    this.connectPromise = null
 
     SocketManager.instance = this
   }
@@ -48,22 +49,48 @@ class SocketManager {
       return Promise.resolve(this.socket)
     }
 
+    if (
+      this.connectPromise &&
+      (this.status === SOCKET_STATUS.CONNECTING || this.status === SOCKET_STATUS.RECONNECTING)
+    ) {
+      return this.connectPromise
+    }
+
     this.closeSocketOnly()
     this.status = this.reconnectAttempts > 0
       ? SOCKET_STATUS.RECONNECTING
       : SOCKET_STATUS.CONNECTING
 
-    return new Promise((resolve, reject) => {
+    this.connectPromise = new Promise((resolve, reject) => {
+      let settled = false
       const timeout = setTimeout(() => {
+        if (settled) return
+        settled = true
+        this.connectPromise = null
         reject(new Error('WEBSOCKET_CONNECT_TIMEOUT'))
         this.handleSocketError(new Error('WEBSOCKET_CONNECT_TIMEOUT'))
       }, this.connectOptions.timeout || 10000)
 
       this.createSocketTask(this.connectOptions)
         .then((socketTask) => {
+          if (settled) {
+            if (socketTask && socketTask.close) {
+              try {
+                socketTask.close({})
+              } catch (error) {
+                try {
+                  socketTask.close()
+                } catch (innerError) {}
+              }
+            }
+            return
+          }
+
           if (!socketTask) {
+            settled = true
             clearTimeout(timeout)
             this.status = SOCKET_STATUS.FALLBACK
+            this.connectPromise = null
             reject(new Error('WEBSOCKET_UNAVAILABLE'))
             return
           }
@@ -71,7 +98,10 @@ class SocketManager {
           this.socket = socketTask
           this.bindSocketEvents(socketTask, {
             onOpen: () => {
+              if (settled) return
+              settled = true
               clearTimeout(timeout)
+              this.connectPromise = null
               this.status = SOCKET_STATUS.OPEN
               this.reconnectAttempts = 0
               this.lastPongAt = Date.now()
@@ -81,7 +111,10 @@ class SocketManager {
               resolve(socketTask)
             },
             onError: (error) => {
+              if (settled) return
+              settled = true
               clearTimeout(timeout)
+              this.connectPromise = null
               this.handleSocketError(error)
               reject(error)
             },
@@ -90,11 +123,16 @@ class SocketManager {
           })
         })
         .catch((error) => {
+          if (settled) return
+          settled = true
           clearTimeout(timeout)
+          this.connectPromise = null
           this.handleSocketError(error)
           reject(error)
         })
     })
+
+    return this.connectPromise
   }
 
   async createSocketTask(options = {}) {
@@ -147,6 +185,7 @@ class SocketManager {
     this.clearReconnect()
     this.stopHeartbeat()
     this.closeSocketOnly()
+    this.connectPromise = null
     this.queue = []
   }
 
