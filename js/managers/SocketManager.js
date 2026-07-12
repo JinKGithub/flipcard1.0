@@ -74,15 +74,7 @@ class SocketManager {
       this.createSocketTask(this.connectOptions)
         .then((socketTask) => {
           if (settled) {
-            if (socketTask && socketTask.close) {
-              try {
-                socketTask.close({})
-              } catch (error) {
-                try {
-                  socketTask.close()
-                } catch (innerError) {}
-              }
-            }
+            this.safeCloseSocketTask(socketTask)
             return
           }
 
@@ -193,6 +185,10 @@ class SocketManager {
     const socket = this.socket
     this.socket = null
 
+    this.safeCloseSocketTask(socket)
+  }
+
+  safeCloseSocketTask(socket) {
     if (socket && socket.close) {
       try {
         socket.close({})
@@ -322,7 +318,7 @@ class SocketManager {
 
   handleSocketClose(event) {
     this.stopHeartbeat()
-    this.closeSocketOnly()
+    this.socket = null
     this.emit('close', event || {})
 
     if (this.manualClose) {
