@@ -18,6 +18,8 @@ import {
   UI_IMAGES
 } from '../utils/config.js'
 
+const ROOM_SOCKET_SYNC_ENABLED = false
+
 class RoomScene {
   constructor(options = {}) {
     this.gameManager = options.gameManager || null
@@ -373,7 +375,7 @@ class RoomScene {
   }
 
   shouldUseSocketSync() {
-    return SYNC_MODE === 'websocket' && Boolean(this.room && this.room._id)
+    return ROOM_SOCKET_SYNC_ENABLED && SYNC_MODE === 'websocket' && Boolean(this.room && this.room._id)
   }
 
   startSocketSync() {
