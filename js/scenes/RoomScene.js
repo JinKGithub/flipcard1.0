@@ -496,18 +496,6 @@ class RoomScene {
   }
 
   async fetchLatestRoom() {
-    if (this.myRole === PLAYER_ROLE.GUEST && this.room.roomCode) {
-      try {
-        const user = await this.ensureUser()
-        const result = await this.cloudDB.callFunction('joinRoom', {
-          roomCode: this.room.roomCode,
-          userInfo: this.buildUserInfo(user)
-        })
-        const payload = result && result.result ? result.result : result
-        if (payload && payload.success && payload.room) return payload.room
-      } catch (error) {}
-    }
-
     try {
       const room = await this.cloudDB.get('rooms', this.room._id)
       if (room) return room
@@ -521,6 +509,18 @@ class RoomScene {
       const payload = result && result.result ? result.result : result
       return payload && payload.success ? payload.room : null
     } catch (error) {}
+
+    if (this.myRole === PLAYER_ROLE.GUEST && this.room.roomCode) {
+      try {
+        const user = await this.ensureUser()
+        const result = await this.cloudDB.callFunction('joinRoom', {
+          roomCode: this.room.roomCode,
+          userInfo: this.buildUserInfo(user)
+        })
+        const payload = result && result.result ? result.result : result
+        if (payload && payload.success && payload.room) return payload.room
+      } catch (error) {}
+    }
 
     return null
   }
