@@ -13,6 +13,10 @@ export const WS_CONFIG = {
   reconnectBaseDelay: 1000
 }
 
+export const AD_UNITS = {
+  HOME_CUSTOM: 'adunit-32e8ce09df9d0235'
+}
+
 export const GAME_NAME = '翻翻对决'
 
 export const SCENE_KEYS = {

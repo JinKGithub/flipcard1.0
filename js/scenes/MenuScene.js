@@ -1,5 +1,6 @@
 import ParticleSystem from '../engine/ParticleSystem.js'
 import AudioManager from '../managers/AudioManager.js'
+import AdManager from '../managers/AdManager.js'
 import InputManager from '../managers/InputManager.js'
 import SocketManager from '../managers/SocketManager.js'
 import UserManager from '../managers/UserManager.js'
@@ -22,6 +23,7 @@ class MenuScene {
     this.inputManager = options.inputManager || InputManager.getInstance()
     this.userManager = options.userManager || UserManager.getInstance()
     this.audioManager = options.audioManager || AudioManager.getInstance()
+    this.adManager = options.adManager || AdManager.getInstance()
     this.socketManager = options.socketManager || SocketManager.getInstance()
     this.cloudDB = options.cloudDB || CloudDB.getInstance()
     this.loader = options.loader || new ResourceLoader()
@@ -77,7 +79,16 @@ class MenuScene {
   exit() {
     this.active = false
     this.enterToken += 1
+    this.adManager.hideHomeAd()
     this.unregisterInputs()
+  }
+
+  handleShow() {
+    if (this.active) this.syncHomeAd()
+  }
+
+  handleHide() {
+    this.adManager.hideHomeAd()
   }
 
   update(deltaTime) {
@@ -122,6 +133,9 @@ class MenuScene {
     const maxRankY = screen.height - safeBottom - rankMinH - 16
     const rankY = Math.max(firstButtonY + (buttonH + buttonGap) * 3 + 8, Math.min(desiredRankY, maxRankY))
     const rankH = Math.max(rankMinH, screen.height - safeBottom - rankY - 16)
+    const mainButtonsBottom = firstButtonY + buttonH * 3 + buttonGap * 2
+    const adTop = mainButtonsBottom + Math.max(10, 12 * scale)
+    const adBottom = screen.height - safeBottom - Math.max(6, 8 * scale)
 
     this.layout = {
       scale,
@@ -144,6 +158,10 @@ class MenuScene {
         y: rankY,
         width: contentW,
         height: rankH
+      },
+      homeAd: {
+        top: adTop,
+        maxBottom: adBottom
       }
     }
 
@@ -151,6 +169,30 @@ class MenuScene {
     this.settingsButton = this.createSettingsButton(safeTop)
     this.buttons = this.createMainButtons(firstButtonY, buttonH, buttonGap)
     this.authButton = this.createAuthButton()
+    if (this.active) this.syncHomeAd()
+  }
+
+  syncHomeAd() {
+    const screen = this.getScreen()
+    const slot = this.layout.homeAd
+    if (!slot) {
+      this.adManager.hideHomeAd()
+      return
+    }
+
+    const side = this.layout.side || 0
+    const safeArea = screen.safeArea || {
+      left: 0,
+      right: screen.width
+    }
+
+    this.adManager.showHomeAd({
+      screenWidth: screen.width,
+      safeLeft: Math.max(safeArea.left || 0, side),
+      safeRight: Math.min(safeArea.right || screen.width, screen.width - side),
+      top: slot.top,
+      maxBottom: slot.maxBottom
+    })
   }
 
   createSettingsButton(safeTop) {
